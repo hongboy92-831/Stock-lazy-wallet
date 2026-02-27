@@ -3,16 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>退休懶錢包 v1.5.1</title>
+    <title>退休懶錢包 v1.5.2</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap');
-        body { font-family: 'Noto+Sans+TC', sans-serif; background-color: #0b1120; color: #f8fafc; }
+        
+        body { 
+            font-family: 'Noto+Sans+TC', sans-serif; 
+            background-color: #0b1120; 
+            color: #f8fafc; 
+        }
+        
         .number-font { font-family: 'Space Grotesk', monospace; }
+        
         .stock-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
         .stock-card:active { transform: scale(0.97); }
+        
         .up-color { color: #ef4444; } /* 台灣紅漲 */
         .down-color { color: #22c55e; } /* 台灣綠跌 */
         
@@ -20,7 +28,9 @@
             0%, 100% { text-shadow: 0 0 10px rgba(239, 68, 68, 0); }
             50% { text-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
         }
+        
         .live-update { animation: pulse-glow 2s infinite; }
+        
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         
@@ -31,12 +41,13 @@
             90% { transform: translateY(0); opacity: 1; }
             100% { transform: translateY(-150%); opacity: 0; }
         }
+        
         .toast-notification { animation: slide-down 6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
     </style>
 </head>
 <body class="pb-24">
 
-    <!-- 解決衝突二：解法 A (輕量化推播) -->
+    <!-- 系統通知推播 -->
     <div id="toast-container" class="fixed top-4 left-0 right-0 z-50 flex justify-center hidden pointer-events-none">
         <div class="bg-indigo-600/95 backdrop-blur-md border border-indigo-400/50 text-white px-5 py-3 rounded-2xl shadow-2xl shadow-indigo-900/50 flex items-center gap-3 max-w-sm w-[90%] pointer-events-auto">
             <i data-lucide="bell-ring" class="w-5 h-5 text-yellow-300"></i>
@@ -44,7 +55,9 @@
                 <p class="text-xs font-bold text-indigo-100">系統通知</p>
                 <p class="text-sm font-medium">歡迎使用退休懶錢包！<br><span class="text-[10px] text-indigo-200">您目前的資產資料為空，請透過下方「記帳」開始您的旅程。</span></p>
             </div>
-            <button onclick="document.getElementById('toast-container').style.display='none'" class="p-1"><i data-lucide="x" class="w-4 h-4 opacity-70"></i></button>
+            <button onclick="document.getElementById('toast-container').style.display='none'" class="p-1">
+                <i data-lucide="x" class="w-4 h-4 opacity-70"></i>
+            </button>
         </div>
     </div>
 
@@ -52,7 +65,7 @@
     <div class="p-4 flex justify-between items-center text-xs text-slate-500 border-b border-slate-800/50">
         <span class="flex items-center gap-2">
             退休懶錢包 
-            <span class="bg-indigo-900/50 text-indigo-400 border border-indigo-700/50 px-2 py-0.5 rounded font-bold number-font">v1.5.1</span>
+            <span class="bg-indigo-900/50 text-indigo-400 border border-indigo-700/50 px-2 py-0.5 rounded font-bold number-font">v1.5.2</span>
         </span>
         <div class="flex items-center gap-2">
             <span class="relative flex h-2 w-2">
@@ -111,7 +124,7 @@
 
     <!-- 卡片式資產列表 -->
     <main id="stock-list" class="px-6 py-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <!-- 卡片會由 JS 動態生成 -->
+        <!-- 卡片由 JS 動態生成 -->
     </main>
 
     <!-- 安全護城河 (固定右下角) -->
@@ -147,7 +160,7 @@
         </div>
     </nav>
 
-    <!-- 記帳雙軌並行 (OCR + CSV) -->
+    <!-- 記帳雙軌並行 (OCR + CSV) 彈窗 -->
     <div id="ocr-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-end sm:items-center justify-center p-0 sm:p-6 opacity-0 transition-opacity duration-300">
         <div class="bg-slate-900 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 border-t sm:border border-slate-700 shadow-2xl transform translate-y-full sm:translate-y-0 transition-transform duration-300" id="ocr-modal-content">
             <div class="w-12 h-1.5 bg-slate-700 rounded-full mx-auto mb-6 sm:hidden"></div>
@@ -194,7 +207,7 @@
         </div>
     </div>
 
-    <!-- 領息紀錄 (卡片化明細) -->
+    <!-- 領息紀錄 (卡片化明細) 彈窗 -->
     <div id="dividend-record-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex flex-col justify-end sm:justify-center p-0 sm:p-4 opacity-0 transition-opacity duration-200">
         <div class="bg-slate-900 w-full sm:max-w-md h-[85vh] sm:h-[80vh] rounded-t-3xl sm:rounded-3xl p-6 border-t sm:border border-slate-700 shadow-2xl relative transform translate-y-full sm:translate-y-0 transition-transform duration-200 flex flex-col" id="dividend-record-content">
             <button onclick="closeDividendRecordModal()" class="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors bg-slate-800 p-2 rounded-full">
@@ -205,7 +218,6 @@
             </h3>
             <p class="text-sm text-slate-400 mb-4">按年份統計與各標的領息明細</p>
             
-            <!-- 列表容器 -->
             <div class="flex-1 overflow-y-auto no-scrollbar pb-4 space-y-4" id="dividend-history-list">
                 <!-- 由 JS 動態生成年份卡片 -->
             </div>
@@ -235,9 +247,10 @@
         </div>
     </div>
 
+    <!-- JavaScript 應用程式邏輯 -->
     <script>
-        const APP_VERSION = "1.5.1";
-        const STORAGE_KEY = "lazy_wallet_data_v1.5.1"; // 更換 Key 確保使用者獲得完全乾淨的初始狀態
+        const APP_VERSION = "1.5.2";
+        const STORAGE_KEY = "lazy_wallet_data_v1.5.2";
         
         let isDividendAdjusted = false;
         let currentTab = 'tw';
@@ -245,7 +258,7 @@
         
         const currentExchangeRate = 32.50; 
 
-        // 核心：乾淨的預設空資料 (歸零)
+        // 核心：乾淨的預設空資料 (歸零狀態)
         const emptyData = {
             tw: [],
             us: [],
@@ -253,9 +266,8 @@
             dividendHistory: []
         };
 
-        // 讀取資料：如果 LocalStorage 有存檔就讀取，否則套用乾淨的空資料
+        // 讀取資料：確保 LocalStorage 持久化，若無則套用空資料
         let appData = JSON.parse(localStorage.getItem(STORAGE_KEY)) || emptyData;
-
         let livePulseInterval;
 
         function initApp() {
@@ -263,19 +275,22 @@
             renderAssets();
             document.getElementById('emergency-fund-input').value = appData.emergencyFund || 0;
             
-            // 如果資產不為空，才啟用跳動特效
             const hasAssets = appData.tw.length > 0 || appData.us.length > 0;
             if (hasAssets) {
                 startLivePulse(); 
             }
 
-            // 初始化時確保存檔，以防丟失
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            // 初始化時確保存檔
+            saveToLocalStorage();
             
-            // 觸發推播 (解法A) - 如果是空資料則提示歡迎，否則提示除息
+            // 推播邏輯
             if (!hasAssets) {
                 setTimeout(showNotification, 1500);
             }
+        }
+
+        function saveToLocalStorage() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
         }
 
         function showNotification() {
@@ -303,6 +318,7 @@
             isDividendAdjusted = !isDividendAdjusted;
             const circle = document.getElementById('toggle-circle');
             const bg = document.getElementById('dividend-toggle');
+            
             if (isDividendAdjusted) {
                 circle.style.transform = 'translateX(16px)';
                 bg.classList.replace('bg-slate-600', 'bg-sky-500');
@@ -317,7 +333,7 @@
             const listContainer = document.getElementById('stock-list');
             listContainer.innerHTML = '';
             
-            // 清除舊的 Chart 實例
+            // 清除舊的 Chart 實例防止內存洩漏
             Object.values(sparklineCharts).forEach(chart => chart.destroy());
             sparklineCharts = {};
             
@@ -425,30 +441,30 @@
             }
             
             lucide.createIcons();
-
-            // 更新頂部總覽
-            document.getElementById('total-assets').innerText = `$${Math.round(totalMarketValueTWD).toLocaleString()}`;
+            updateDashboardMetrics(totalMarketValueTWD, todayPnLTWD);
+        }
+        
+        function updateDashboardMetrics(totalValue, todayPnL) {
+            document.getElementById('total-assets').innerText = `$${Math.round(totalValue).toLocaleString()}`;
             
             const pnlValEl = document.getElementById('today-pnl-value');
             const pnlPctEl = document.getElementById('total-pnl');
             const pnlBgEl = document.getElementById('today-icon-bg');
             const pnlIconEl = document.getElementById('today-icon');
 
-            if (totalMarketValueTWD === 0) {
+            if (totalValue === 0) {
                 pnlValEl.innerText = '+$0';
                 pnlPctEl.innerText = '0.00%';
-                
-                // 歸零狀態顯示中性灰色
                 pnlValEl.className = 'text-xl font-bold text-slate-400 number-font';
                 pnlPctEl.className = 'text-sm font-medium text-slate-400 bg-slate-500/10 px-1.5 py-0.5 rounded number-font';
                 pnlBgEl.className = 'p-2 bg-slate-500/10 rounded-xl';
                 pnlIconEl.className = 'w-5 h-5 text-slate-400';
             } else {
-                pnlValEl.innerText = `${todayPnLTWD >= 0 ? '+' : ''}$${Math.round(todayPnLTWD).toLocaleString()}`;
-                const totalPercent = (todayPnLTWD / totalMarketValueTWD * 100).toFixed(2);
+                pnlValEl.innerText = `${todayPnL >= 0 ? '+' : ''}$${Math.round(todayPnL).toLocaleString()}`;
+                const totalPercent = (todayPnL / totalValue * 100).toFixed(2);
                 pnlPctEl.innerText = `${totalPercent >= 0 ? '+' : ''}${totalPercent}%`;
                 
-                if(todayPnLTWD < 0) {
+                if(todayPnL < 0) {
                     pnlValEl.className = 'text-xl font-bold down-color number-font';
                     pnlPctEl.className = 'text-sm font-medium down-color bg-green-500/10 px-1.5 py-0.5 rounded number-font';
                     pnlBgEl.className = 'p-2 bg-green-500/10 rounded-xl';
@@ -460,7 +476,6 @@
                     pnlIconEl.className = 'w-5 h-5 up-color';
                 }
                 
-                // 只有在有資產時才啟動跳動特效
                 startLivePulse();
             }
         }
@@ -498,7 +513,7 @@
             clearInterval(livePulseInterval);
             
             const hasAssets = appData.tw.length > 0 || appData.us.length > 0;
-            if (!hasAssets) return; // 沒有資產則不跳動
+            if (!hasAssets) return; 
 
             livePulseInterval = setInterval(() => {
                 const isUp = Math.random() > 0.5;
@@ -517,31 +532,63 @@
             }, 3500);
         }
 
-        // ---------- 彈窗模組 ----------
-        function toggleOCRModal() {
-            const modal = document.getElementById('ocr-modal');
-            const content = document.getElementById('ocr-modal-content');
+        // ---------- UI 彈窗控制邏輯 ----------
+        function toggleModal(modalId, contentId) {
+            const modal = document.getElementById(modalId);
+            const content = document.getElementById(contentId);
             
             if (modal.classList.contains('hidden')) {
                 modal.classList.remove('hidden');
                 setTimeout(() => {
                     modal.classList.remove('opacity-0');
-                    if(window.innerWidth < 640) content.classList.remove('translate-y-full'); 
-                    else content.classList.remove('scale-95');
+                    if(window.innerWidth < 640 && content.classList.contains('translate-y-full')) {
+                        content.classList.remove('translate-y-full'); 
+                    } else if (content.classList.contains('scale-95')) {
+                        content.classList.remove('scale-95');
+                    }
                 }, 10);
             } else {
                 modal.classList.add('opacity-0');
-                if(window.innerWidth < 640) content.classList.add('translate-y-full');
-                else content.classList.add('scale-95');
+                if(window.innerWidth < 640 && !content.classList.contains('translate-y-full') && content.className.includes('translate-y-')) {
+                     content.classList.add('translate-y-full');
+                } else if (!content.className.includes('translate-y-')) {
+                     content.classList.add('scale-95');
+                }
                 setTimeout(() => modal.classList.add('hidden'), 300);
             }
         }
 
+        function toggleOCRModal() {
+            toggleModal('ocr-modal', 'ocr-modal-content');
+        }
+
+        function toggleSafetyModal() {
+            toggleModal('safety-modal', 'safety-modal-content');
+        }
+        
+        function toggleSettingsModal() {
+            toggleModal('settings-modal', 'settings-modal-content');
+        }
+
+        function showDividendRecordModal() {
+            toggleModal('dividend-record-modal', 'dividend-record-content');
+            renderDividendHistory();
+        }
+
+        function closeDividendRecordModal() {
+            toggleModal('dividend-record-modal', 'dividend-record-content');
+        }
+
+        // ---------- 業務操作邏輯 ----------
         function simulateAIOCR() {
             alert("✨ 辨識成功！\n\n買入：00929 復華台灣科技優息\n股數：5,000股\n單價：19.50\n\n資料已入庫，現在即使重新整理網頁，資料也不會消失！");
-            const newStock = { id: '00929', name: '復華科技優息', price: 19.5, shares: 5000, cost: 19.5, dividend: 0, change: 0.1, history:[19.3, 19.4, 19.4, 19.5, 19.4, 19.5, 19.5] };
+            const newStock = { 
+                id: '00929', name: '復華科技優息', price: 19.5, shares: 5000, 
+                cost: 19.5, dividend: 0, change: 0.1, 
+                history:[19.3, 19.4, 19.4, 19.5, 19.4, 19.5, 19.5] 
+            };
             appData.tw.push(newStock);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            saveToLocalStorage();
             toggleOCRModal();
             renderAssets();
         }
@@ -550,61 +597,24 @@
             const file = event.target.files[0];
             if (!file) return;
             alert(`✅ 成功讀取 CSV 檔案：${file.name}\n\n系統已自動抓取欄位並扣除手續費。已匯入：0050 元大台灣50`);
-            const newStock = { id: '0050', name: '元大台灣50', price: 165, shares: 1000, cost: 160, dividend: 0, change: 1.5, history:[160, 161, 163, 162, 164, 163, 165] };
+            const newStock = { 
+                id: '0050', name: '元大台灣50', price: 165, shares: 1000, 
+                cost: 160, dividend: 0, change: 1.5, 
+                history:[160, 161, 163, 162, 164, 163, 165] 
+            };
             appData.tw.push(newStock);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            saveToLocalStorage();
             toggleOCRModal();
             renderAssets();
             event.target.value = ''; 
         }
 
-        function toggleSafetyModal() {
-            const modal = document.getElementById('safety-modal');
-            const content = document.getElementById('safety-modal-content');
-            
-            if (modal.classList.contains('hidden')) {
-                modal.classList.remove('hidden');
-                setTimeout(() => {
-                    modal.classList.remove('opacity-0');
-                    content.classList.remove('scale-95');
-                }, 10);
-            } else {
-                modal.classList.add('opacity-0');
-                content.classList.add('scale-95');
-                setTimeout(() => modal.classList.add('hidden'), 200);
-            }
-        }
-
         function saveEmergencyFund() {
             const val = document.getElementById('emergency-fund-input').value;
             appData.emergencyFund = parseInt(val) || 0;
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            saveToLocalStorage();
             toggleSafetyModal();
             renderAssets();
-        }
-
-        function showDividendRecordModal() {
-            const modal = document.getElementById('dividend-record-modal');
-            const content = document.getElementById('dividend-record-content');
-            
-            modal.classList.remove('hidden');
-            setTimeout(() => {
-                modal.classList.remove('opacity-0');
-                if(window.innerWidth < 640) content.classList.remove('translate-y-full'); 
-                else content.classList.remove('scale-95');
-            }, 10);
-            
-            renderDividendHistory();
-        }
-
-        function closeDividendRecordModal() {
-            const modal = document.getElementById('dividend-record-modal');
-            const content = document.getElementById('dividend-record-content');
-            
-            modal.classList.add('opacity-0');
-            if(window.innerWidth < 640) content.classList.add('translate-y-full'); 
-            else content.classList.add('scale-95');
-            setTimeout(() => { modal.classList.add('hidden'); }, 200);
         }
         
         function renderDividendHistory() {
@@ -658,30 +668,15 @@
             lucide.createIcons();
         }
 
-        // ---------- 檔案備份與還原邏輯 ----------
-        function toggleSettingsModal() {
-            const modal = document.getElementById('settings-modal');
-            const content = document.getElementById('settings-modal-content');
-            
-            if (modal.classList.contains('hidden')) {
-                modal.classList.remove('hidden');
-                setTimeout(() => {
-                    modal.classList.remove('opacity-0');
-                    content.classList.remove('scale-95');
-                }, 10);
-            } else {
-                modal.classList.add('opacity-0');
-                content.classList.add('scale-95');
-                setTimeout(() => modal.classList.add('hidden'), 200);
-            }
-        }
-
+        // ---------- 備份還原邏輯 ----------
         function exportData() {
             const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(appData));
             const downloadAnchorNode = document.createElement('a');
             const dateStr = new Date().toISOString().slice(0, 10);
+            
             downloadAnchorNode.setAttribute("href", dataStr);
             downloadAnchorNode.setAttribute("download", `lazy_wallet_backup_${dateStr}.json`);
+            
             document.body.appendChild(downloadAnchorNode); 
             downloadAnchorNode.click();
             downloadAnchorNode.remove();
@@ -697,10 +692,12 @@
                     const importedData = JSON.parse(e.target.result);
                     if (importedData && importedData.tw && importedData.us) {
                         appData = importedData;
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+                        saveToLocalStorage();
+                        
                         document.getElementById('emergency-fund-input').value = appData.emergencyFund || 0;
                         renderAssets();
                         toggleSettingsModal();
+                        
                         alert("✅ 備份資料還原成功！資產狀態已更新。");
                     } else {
                         alert("❌ 檔案格式不符，請確認這是否為退休懶錢包的備份檔。");
@@ -713,6 +710,7 @@
             reader.readAsText(file);
         }
 
+        // 啟動應用程式
         window.onload = initApp;
     </script>
 </body>
