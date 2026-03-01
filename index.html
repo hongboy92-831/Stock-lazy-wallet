@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Stockify 專業版 v4.2.8</title>
+    <title>Stockify 專業版 v4.3.0</title>
     
     <!-- 1. 引入必要的函式庫 (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -25,7 +25,8 @@
             background: transparent; bottom: 0; color: transparent; cursor: pointer;
             height: auto; left: 0; position: absolute; right: 0; top: 0; width: auto;
         }
-        .app-container { height: 100vh; width: 100%; max-width: 640px; margin: 0 auto; position: relative; display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+        /* 外層容器：在 PC 上保持手機般的寬度置中，在手機上 100% 滿版 */
+        .app-container { height: 100vh; width: 100%; max-width: 640px; margin: 0 auto; position: relative; display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); background-color: white;}
     </style>
 </head>
 <body>
@@ -50,7 +51,7 @@
             appId: ""
         });
 
-        // 安全防護：檢查是否有填寫 API Key (決定使用單機或雲端)
+        // 安全防護：檢查是否有填寫 API Key
         const isFirebaseConfigured = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "";
         
         let auth = null;
@@ -64,10 +65,8 @@
             db = firebase.firestore();
         }
 
-        const APP_VERSION = 'v4.2.8';
+        const APP_VERSION = 'v4.3.0';
         const TOKEN_KEY = 'stockify_token';
-        
-        // 預設 FinMind Token
         const MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0wMSAwMjowOTo0OCIsInVzZXJfaWQiOiJob25nYm95IiwiZW1haWwiOiJob25nYm95OTJAZ21haWwuY29tIiwiaXAiOiI2MS4yMjAuOTMuNzQifQ.Mk4GPZsGRLM79QvxVHIcRXE5y_FThk9uMCsoJfmQCYc";
 
         const STORAGE_KEY = 'stockify_v4_txs';
@@ -97,8 +96,9 @@
                 Upload: <React.Fragment><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5-5-5-5 5m5-5v12"/></React.Fragment>,
                 Cloud: <React.Fragment><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></React.Fragment>
             };
+            // 讓 className 主導尺寸，若無指定 className 則使用預設 size
             return (
-                <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                <svg width={className ? "100%" : size} height={className ? "100%" : size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
                     {icons[name] || <circle cx="12" cy="12" r="10" stroke="red" />}
                 </svg>
             );
@@ -129,7 +129,6 @@
             const [formFee, setFormFee] = useState('');         
             const [isSearchingName, setIsSearchingName] = useState(false);
 
-            // --- 1. 初始化 ---
             useEffect(() => {
                 const savedToken = localStorage.getItem(TOKEN_KEY);
                 setApiToken(savedToken || MY_TOKEN);
@@ -168,7 +167,6 @@
                 return () => { unsub(); unsubM(); };
             }, [user]);
 
-            // --- 2. API 查詢 ---
             const syncMarketData = async () => {
                 if (isUpdating || !apiToken) return;
                 const codes = [...new Set(transactions.map(t => t.stockId))];
@@ -259,7 +257,6 @@
                 return { total: activeTab === '買進' ? -(amt + f) : (amt - f - tax), fee: f + tax };
             }, [formPrice, formShares, formFee, formTotalAmount, activeTab, formCode]);
 
-            // --- 3. 動作處理 ---
             const saveTx = async (stay) => {
                 if (!formCode || (activeTab !== '配息' && (!formPrice || !formShares))) return;
                 const code = formCode.toUpperCase();
@@ -312,27 +309,14 @@
                 localStorage.setItem(TOKEN_KEY, token); 
             };
             
-            // 🎯 智慧解析器：允許貼上帶有變數宣告與分號的 JS 物件
             const handleSaveFbConfig = () => {
                 let input = fbConfigInput.trim();
                 if(!input) return;
-                
                 try {
-                    // 移除可能複製到的 "const firebaseConfig = " 等宣告文字
-                    if (input.includes('=')) {
-                        input = input.substring(input.indexOf('=') + 1).trim();
-                    }
-                    // 移除結尾的分號
-                    if (input.endsWith(';')) {
-                        input = input.slice(0, -1).trim();
-                    }
-                    
-                    // 使用安全評估將 JS 物件轉為標準 JSON 物件
+                    if (input.includes('=')) input = input.substring(input.indexOf('=') + 1).trim();
+                    if (input.endsWith(';')) input = input.slice(0, -1).trim();
                     const parsed = new Function("return " + input)();
-                    
                     if (!parsed || !parsed.apiKey) throw new Error("找不到 apiKey，請確認內容完整");
-                    
-                    // 強制以標準 JSON 格式存入 LocalStorage
                     localStorage.setItem('stockify_firebase_config', JSON.stringify(parsed));
                     alert("🎉 Firebase 雲端設定已成功套用！\n系統將為您重新載入頁面連線雲端。");
                     window.location.reload();
@@ -368,47 +352,61 @@
             if (isCloudLoading) return <div className="h-screen flex flex-col items-center justify-center bg-white"><div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div><p className="font-black text-blue-500 italic uppercase">Initializing...</p></div>;
 
             return (
-                <div className="app-container overflow-hidden bg-white">
+                <div className="app-container">
                     <div className="flex-1 overflow-hidden relative bg-white">
                         
-                        {/* 首頁 */}
+                        {/* 1. 首頁 */}
                         {view === 'holding' && (
                             <div className="flex flex-col h-full animate-in fade-in">
-                                <div className="p-5 flex justify-between items-center border-b border-gray-50 bg-white sticky top-0 z-20">
+                                <div className="p-4 sm:p-6 flex justify-between items-center border-b border-gray-50 bg-white sticky top-0 z-20">
                                     <div className="flex flex-col">
-                                        <h1 className="text-3xl font-black italic text-gray-800 tracking-tighter">St<span className="text-blue-600">o</span>ckify</h1>
-                                        <p className="text-[10px] text-gray-400 font-bold ml-1 uppercase tracking-widest">{APP_VERSION} • {isFirebaseConfigured ? <span className="text-blue-500">Cloud Mode</span> : 'Local Mode'}</p>
+                                        <h1 className="text-2xl sm:text-3xl font-black italic text-gray-800 tracking-tighter">St<span className="text-blue-600">o</span>ckify</h1>
+                                        <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold ml-1 uppercase tracking-widest">{APP_VERSION} • {isFirebaseConfigured ? <span className="text-blue-500">Cloud</span> : 'Local'}</p>
                                     </div>
-                                    <div className="flex space-x-2">
-                                        <button onClick={() => setIsMasked(!isMasked)} className="p-2 text-gray-300 active:scale-95"><Icon name="RotateCcw" size={24}/></button>
-                                        <button onClick={() => setView('settings')} className="p-2 text-gray-400 active:scale-95"><Icon name="Settings" size={24}/></button>
+                                    <div className="flex space-x-2 sm:space-x-3">
+                                        <button onClick={() => setIsMasked(!isMasked)} className="p-2 text-gray-300 active:scale-95"><Icon name="RotateCcw" className="w-5 h-5 sm:w-6 sm:h-6"/></button>
+                                        <button onClick={() => setView('settings')} className="p-2 text-gray-400 active:scale-95"><Icon name="Settings" className="w-5 h-5 sm:w-6 sm:h-6"/></button>
                                     </div>
                                 </div>
-                                <div className="px-6 py-6">
+                                <div className="px-4 sm:px-6 py-4 sm:py-6">
                                     <div className="flex justify-between items-center mb-1">
-                                        <span className="text-gray-400 font-bold text-xs uppercase tracking-widest">{showWithDividend ? '累積損益 (含息)' : '持股未實現損益'}</span>
-                                        <button onClick={() => setShowWithDividend(!showWithDividend)} className={`px-3 py-1 rounded-xl border text-xs font-black flex items-center space-x-1 ${showWithDividend ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
-                                            {showWithDividend ? <Icon name="ToggleRight" size={20}/> : <Icon name="ToggleLeft" size={20}/>} <span>{showWithDividend ? '含息' : '除息'}</span>
+                                        <span className="text-gray-400 font-bold text-[10px] sm:text-xs uppercase tracking-widest">{showWithDividend ? '累積損益 (含息)' : '未實現損益'}</span>
+                                        <button onClick={() => setShowWithDividend(!showWithDividend)} className={`px-2 py-1 sm:px-3 sm:py-1.5 rounded-lg sm:rounded-xl border text-[10px] sm:text-xs font-black flex items-center space-x-1 ${showWithDividend ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                                            {showWithDividend ? <Icon name="ToggleRight" className="w-4 h-4 sm:w-5 sm:h-5"/> : <Icon name="ToggleLeft" className="w-4 h-4 sm:w-5 sm:h-5"/>} <span>{showWithDividend ? '含息' : '除息'}</span>
                                         </button>
                                     </div>
-                                    <div className="flex items-baseline space-x-3">
-                                        <span className="text-5xl font-black tabular-nums tracking-tighter"><Mask val={stats.profit} /></span>
-                                        <span className={`text-xl font-black ${stats.profit >= 0 ? 'text-red-500' : 'text-green-600'}`}>{isMasked ? '***' : `${stats.profit >= 0 ? '+' : ''}${stats.pct.toFixed(2)}%`}</span>
+                                    <div className="flex items-baseline space-x-2 sm:space-x-3 mt-1 sm:mt-0">
+                                        <span className="text-4xl sm:text-5xl font-black tabular-nums tracking-tighter"><Mask val={stats.profit} /></span>
+                                        <span className={`text-base sm:text-xl font-black ${stats.profit >= 0 ? 'text-red-500' : 'text-green-600'}`}>{isMasked ? '***' : `${stats.profit >= 0 ? '+' : ''}${stats.pct.toFixed(2)}%`}</span>
                                     </div>
                                 </div>
-                                <div className="grid grid-cols-3 px-6 py-6 border-y border-gray-100 bg-gray-50/40">
-                                    <div className="text-center"><p className="text-gray-400 font-black text-[10px] uppercase">今日損益</p><p className="font-black text-xl"><Mask val={stats.dp} /></p></div>
-                                    <div className="text-center border-x border-gray-200"><p className="text-gray-400 font-black text-[10px] uppercase tracking-tighter">持股市值</p><p className="font-black text-xl text-gray-800">{isMasked ? '****' : stats.mv.toLocaleString()}</p></div>
-                                    <div className="text-center"><p className="text-gray-400 font-black text-[10px] uppercase text-red-500">累積配息</p><p className="font-black text-xl text-gray-800">{isMasked ? '****' : stats.td.toLocaleString()}</p></div>
+                                <div className="grid grid-cols-3 px-2 sm:px-6 py-4 sm:py-6 border-y border-gray-100 bg-gray-50/40">
+                                    <div className="text-center"><p className="text-gray-400 font-black text-[9px] sm:text-[10px] uppercase">今日損益</p><p className="font-black text-base sm:text-xl mt-0.5"><Mask val={stats.dp} /></p></div>
+                                    <div className="text-center border-x border-gray-200"><p className="text-gray-400 font-black text-[9px] sm:text-[10px] uppercase tracking-tighter">持股市值</p><p className="font-black text-base sm:text-xl text-gray-800 mt-0.5">{isMasked ? '****' : stats.mv.toLocaleString()}</p></div>
+                                    <div className="text-center"><p className="text-gray-400 font-black text-[9px] sm:text-[10px] uppercase text-red-500">累積配息</p><p className="font-black text-base sm:text-xl text-gray-800 mt-0.5">{isMasked ? '****' : stats.td.toLocaleString()}</p></div>
                                 </div>
-                                <div className="flex-1 overflow-y-auto pb-40">
-                                    <div className="grid grid-cols-4 px-6 py-3 text-[10px] text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10"><span>標的 / 股數</span><span className="text-right">現價</span><span className="text-right">{showWithDividend ? '含息成本' : '平均成本'}</span><span className="text-right">損益</span></div>
+                                
+                                {/* 響應式列表標題 (改用 Flex 動態配置寬度) */}
+                                <div className="flex px-4 sm:px-6 py-2 sm:py-3 text-[10px] sm:text-xs text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10">
+                                    <span className="w-[34%]">標的 / 股數</span>
+                                    <span className="w-[22%] text-right">現價</span>
+                                    <span className="w-[22%] text-right">{showWithDividend ? '含息' : '平均'}</span>
+                                    <span className="w-[22%] text-right">損益</span>
+                                </div>
+                                
+                                <div className="flex-1 overflow-y-auto pb-32 sm:pb-40">
                                     {Object.entries(stats.inv).map(([id, d]) => d.sh > 0 && (
-                                        <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="grid grid-cols-4 px-6 py-5 border-b border-gray-50 items-center active:bg-gray-50 cursor-pointer">
-                                            <div><p className="font-black text-lg leading-tight">{d.n}</p><p className="text-xs text-gray-400">{id} / {d.sh.toLocaleString()}股</p></div>
-                                            <div className="text-right"><p className="font-black text-lg">{marketData[id]?.p || "---"}</p><p className={`text-[10px] font-bold ${marketData[id]?.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{marketData[id]?.c >= 0 ? '▲' : '▼'} {Math.abs(marketData[id]?.c || 0)}</p></div>
-                                            <div className="text-right font-bold text-gray-600">{isMasked ? '***' : ((d.cost - (showWithDividend?d.div:0))/d.sh).toFixed(2)}</div>
-                                            <div className="text-right font-black text-lg"><Mask val={(d.sh*(marketData[id]?.p||0)) - d.cost + (showWithDividend?d.div:0)} /></div>
+                                        <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="flex px-4 sm:px-6 py-4 sm:py-5 border-b border-gray-50 items-center active:bg-gray-50 cursor-pointer transition-colors">
+                                            <div className="w-[34%] pr-1 min-w-0">
+                                                <p className="font-black text-sm sm:text-lg leading-tight truncate">{d.n}</p>
+                                                <p className="text-[10px] sm:text-xs text-gray-400 truncate mt-0.5">{id} / {d.sh.toLocaleString()}股</p>
+                                            </div>
+                                            <div className="w-[22%] text-right min-w-0 pr-1">
+                                                <p className="font-black text-sm sm:text-lg truncate">{marketData[id]?.p || "---"}</p>
+                                                <p className={`text-[9px] sm:text-[10px] font-bold mt-0.5 truncate ${marketData[id]?.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{marketData[id]?.c >= 0 ? '▲' : '▼'} {Math.abs(marketData[id]?.c || 0)}</p>
+                                            </div>
+                                            <div className="w-[22%] text-right font-bold text-gray-600 text-xs sm:text-base truncate pr-1">{isMasked ? '***' : ((d.cost - (showWithDividend?d.div:0))/d.sh).toFixed(2)}</div>
+                                            <div className="w-[22%] text-right font-black text-sm sm:text-lg truncate pl-1"><Mask val={(d.sh*(marketData[id]?.p||0)) - d.cost + (showWithDividend?d.div:0)} /></div>
                                         </div>
                                     ))}
                                     {Object.keys(stats.inv).length === 0 && <div className="p-10 text-center text-gray-300 font-bold text-sm">點擊下方 + 號開始記錄第一筆交易</div>}
@@ -416,14 +414,14 @@
                             </div>
                         )}
 
-                        {/* 紀錄 */}
+                        {/* 2. 交易紀錄 */}
                         {view === 'record' && (
                             <div className="flex flex-col h-full animate-in fade-in bg-white">
-                                <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20">
-                                    <h1 className="text-3xl font-black italic text-gray-800">交易流水帳</h1>
-                                    <button onClick={() => setRecordSortOrder(recordSortOrder === 'desc' ? 'asc' : 'desc')} className="p-2 bg-gray-50 rounded-xl active:scale-95 transition-transform"><Icon name="ArrowUpDown" size={24}/></button>
+                                <div className="p-4 sm:p-6 flex justify-between items-center border-b border-gray-50 bg-white sticky top-0 z-20">
+                                    <h1 className="text-2xl sm:text-3xl font-black italic text-gray-800">歷史交易</h1>
+                                    <button onClick={() => setRecordSortOrder(recordSortOrder === 'desc' ? 'asc' : 'desc')} className="p-2 bg-gray-50 rounded-xl active:scale-95 transition-transform"><Icon name="ArrowUpDown" className="w-5 h-5 sm:w-6 sm:h-6"/></button>
                                 </div>
-                                <div className="flex-1 overflow-y-auto pb-40">
+                                <div className="flex-1 overflow-y-auto pb-32 sm:pb-40">
                                     {(() => {
                                         const groups = {};
                                         [...transactions].sort((a,b)=>recordSortOrder==='desc' ? b.timestamp-a.timestamp : a.timestamp-b.timestamp).forEach(tx => {
@@ -435,13 +433,16 @@
                                         
                                         return Object.entries(groups).map(([date, g]) => (
                                             <div key={date}>
-                                                <div className="bg-gray-50 px-6 py-2 flex justify-between items-center border-b border-gray-100 font-black text-gray-400 text-[10px]"><span>{date}</span><span>當日支出: {g.exp.toLocaleString()}</span></div>
+                                                <div className="bg-gray-50 px-4 sm:px-6 py-2 flex justify-between items-center border-b border-gray-100 font-black text-gray-400 text-[10px]"><span>{date}</span><span>當日支出: {g.exp.toLocaleString()}</span></div>
                                                 {g.txs.map(tx => (
-                                                    <div key={tx.id} className="grid grid-cols-4 px-6 py-6 border-b border-gray-100 items-center">
-                                                        <span className="font-black text-lg">{tx.stockName}</span>
-                                                        <span className="text-center font-bold text-gray-500 text-xs">{tx.type}<br/>{tx.shares.toLocaleString()}股</span>
-                                                        <span className="text-right font-black">{tx.price.toLocaleString()}</span>
-                                                        <div className="flex items-center justify-end space-x-3"><span className={`font-black ${tx.total >= 0 ? 'text-red-500' : 'text-green-600'}`}>{tx.total.toLocaleString()}</span><button onClick={()=>setPendingDeleteId(tx.id)} className="text-gray-300 p-1 hover:text-red-500 transition-colors"><Icon name="Trash" size={20}/></button></div>
+                                                    <div key={tx.id} className="flex px-4 sm:px-6 py-4 sm:py-6 border-b border-gray-50 items-center">
+                                                        <span className="w-[35%] font-black text-sm sm:text-lg truncate pr-1">{tx.stockName}</span>
+                                                        <span className="w-[20%] text-center font-bold text-gray-500 text-[10px] sm:text-xs leading-tight truncate">{tx.type}<br/>{tx.shares.toLocaleString()}股</span>
+                                                        <span className="w-[20%] text-right font-black text-sm sm:text-base truncate px-1">{tx.price.toLocaleString()}</span>
+                                                        <div className="w-[25%] flex items-center justify-end space-x-1 sm:space-x-2 truncate">
+                                                            <span className={`font-black text-sm sm:text-base ${tx.total >= 0 ? 'text-red-500' : 'text-green-600'}`}>{tx.total.toLocaleString()}</span>
+                                                            <button onClick={()=>setPendingDeleteId(tx.id)} className="text-gray-300 p-1 hover:text-red-500 transition-colors"><Icon name="Trash" className="w-4 h-4 sm:w-5 sm:h-5"/></button>
+                                                        </div>
                                                     </div>
                                                 ))}
                                             </div>
@@ -451,11 +452,11 @@
                             </div>
                         )}
 
-                        {/* 股息 */}
+                        {/* 3. 股息統計 */}
                         {view === 'dividend' && (
                             <div className="flex flex-col h-full animate-in fade-in bg-white">
-                                <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20"><h1 className="text-3xl font-black italic text-gray-800 tracking-tighter">股息統計</h1><Icon name="Coins" size={28} className="text-blue-500"/></div>
-                                <div className="flex-1 overflow-y-auto pb-40 p-6 space-y-8">
+                                <div className="p-4 sm:p-6 flex justify-between items-center border-b border-gray-50 bg-white sticky top-0 z-20"><h1 className="text-2xl sm:text-3xl font-black italic text-gray-800 tracking-tighter">股息統計</h1><Icon name="Coins" className="w-6 h-6 sm:w-7 sm:h-7 text-blue-500"/></div>
+                                <div className="flex-1 overflow-y-auto pb-32 sm:pb-40 p-4 sm:p-6 space-y-6 sm:space-y-8">
                                     {(() => {
                                         const years = {};
                                         transactions.filter(t => t.type === '配息').forEach(tx => {
@@ -469,9 +470,9 @@
                                         if (yearEntries.length === 0) return <div className="p-20 text-center text-gray-300 font-black">無領息紀錄</div>;
 
                                         return yearEntries.map(([y, d]) => (
-                                            <div key={y} className="bg-gray-50 rounded-[32px] overflow-hidden border border-gray-100 shadow-sm">
-                                                <div className="bg-blue-600 px-6 py-4 flex justify-between items-center text-white"><span className="text-2xl font-black">{y} 年度</span><div className="text-right"><p className="text-[10px] font-black opacity-60 uppercase">Yearly Total</p><p className="text-xl font-black">${d.total.toLocaleString()}</p></div></div>
-                                                <div className="p-4 space-y-4">{Object.entries(d.stocks).map(([id, s]) => (<div key={id} className="flex justify-between items-center px-2 border-b border-gray-100 pb-4 last:border-0 last:pb-0"><div className="flex flex-col"><span className="font-black text-lg text-gray-800">{s.n}</span><span className="text-[10px] font-black text-gray-400">{id}</span></div><span className="text-xl font-black text-red-500 tabular-nums">${s.amt.toLocaleString()}</span></div>))}</div>
+                                            <div key={y} className="bg-gray-50 rounded-2xl sm:rounded-[32px] overflow-hidden border border-gray-100 shadow-sm">
+                                                <div className="bg-blue-600 px-4 sm:px-6 py-3 sm:py-4 flex justify-between items-center text-white"><span className="text-xl sm:text-2xl font-black">{y} 年度</span><div className="text-right"><p className="text-[9px] sm:text-[10px] font-black opacity-60 uppercase">Yearly Total</p><p className="text-lg sm:text-xl font-black">${d.total.toLocaleString()}</p></div></div>
+                                                <div className="p-4 space-y-3 sm:space-y-4">{Object.entries(d.stocks).map(([id, s]) => (<div key={id} className="flex justify-between items-center px-2 border-b border-gray-100 pb-3 sm:pb-4 last:border-0 last:pb-0"><div className="flex flex-col"><span className="font-black text-base sm:text-lg text-gray-800">{s.n}</span><span className="text-[9px] sm:text-[10px] font-black text-gray-400 mt-0.5">{id}</span></div><span className="text-lg sm:text-xl font-black text-red-500 tabular-nums">${s.amt.toLocaleString()}</span></div>))}</div>
                                             </div>
                                         ));
                                     })()}
@@ -479,57 +480,51 @@
                             </div>
                         )}
 
-                        {/* 設定 */}
+                        {/* 4. 設定頁面 */}
                         {view === 'settings' && (
                             <div className="absolute inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-right duration-300">
-                                <div className="p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tighter uppercase text-gray-800">系統設定</h2><div className="w-10"></div></div>
-                                <div className="p-10 space-y-8 flex-1 overflow-y-auto pb-40">
-                                    <div className="space-y-3">
-                                        <label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Key" size={20} className="mr-2"/> FinMind 股價查詢金鑰</label>
-                                        <input type="password" placeholder="請貼上 FinMind API Token" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-lg border-2 border-transparent focus:border-blue-200 transition-all" value={apiToken} onChange={e => handleSaveToken(e.target.value)} />
-                                        <p className="text-xs text-gray-400 font-bold px-2">※ 用於抓取最新市場行情報價。</p>
+                                <div className="p-4 sm:p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" className="w-8 h-8 sm:w-10 sm:h-10"/></button><h2 className="flex-1 text-center font-black text-xl sm:text-2xl tracking-tighter uppercase text-gray-800">系統設定</h2><div className="w-10"></div></div>
+                                <div className="p-6 sm:p-10 space-y-6 sm:space-y-8 flex-1 overflow-y-auto pb-40">
+                                    <div className="space-y-2 sm:space-y-3">
+                                        <label className="flex items-center text-xs sm:text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Key" className="w-4 h-4 sm:w-5 sm:h-5 mr-2"/> FinMind 股價查詢金鑰</label>
+                                        <input type="password" placeholder="請貼上 FinMind API Token" className="w-full bg-gray-50 p-4 sm:p-6 rounded-xl sm:rounded-[24px] outline-none font-black text-base sm:text-lg border-2 border-transparent focus:border-blue-200 transition-all" value={apiToken} onChange={e => handleSaveToken(e.target.value)} />
                                     </div>
                                     
                                     <div className="h-px bg-gray-100 my-2"></div>
                                     
-                                    <div className="space-y-3">
-                                        <label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Cloud" size={20} className="mr-2 text-blue-500"/> Firebase 雲端同步金鑰</label>
-                                        <p className="text-xs text-gray-400 font-bold px-2 pb-1">請將 Firebase 產生的設定程式碼（包含大括號）直接貼入下方：</p>
+                                    <div className="space-y-2 sm:space-y-3">
+                                        <label className="flex items-center text-xs sm:text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Cloud" className="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-blue-500"/> Firebase 雲端同步金鑰</label>
+                                        <p className="text-[10px] sm:text-xs text-gray-400 font-bold px-2 pb-1">請將 Firebase 產生的設定程式碼（包含大括號）直接貼入下方：</p>
                                         <textarea 
-                                            placeholder='{&#10;  apiKey: "AIza...",&#10;  authDomain: "...",&#10;  projectId: "..."&#10;}' 
-                                            className="w-full h-40 bg-blue-50/50 p-4 rounded-[24px] outline-none font-mono text-xs border-2 border-transparent focus:border-blue-200 transition-all resize-none text-gray-600" 
+                                            placeholder='{&#10;  apiKey: "...",&#10;  projectId: "..."&#10;}' 
+                                            className="w-full h-32 sm:h-40 bg-blue-50/50 p-4 rounded-xl sm:rounded-[24px] outline-none font-mono text-[10px] sm:text-xs border-2 border-transparent focus:border-blue-200 transition-all resize-none text-gray-600" 
                                             value={fbConfigInput} 
                                             onChange={e => setFbConfigInput(e.target.value)} 
                                         />
-                                        <div className="flex space-x-3 pt-2">
-                                            <button onClick={handleSaveFbConfig} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black active:scale-95 transition-transform shadow-lg shadow-blue-200">套用雲端設定</button>
-                                            <button onClick={handleClearFbConfig} className="flex-1 py-4 bg-gray-200 text-gray-600 rounded-2xl font-black active:scale-95 transition-transform">清除 (切回單機)</button>
+                                        <div className="flex space-x-2 sm:space-x-3 pt-2">
+                                            <button onClick={handleSaveFbConfig} className="flex-1 py-3 sm:py-4 bg-blue-600 text-white rounded-xl sm:rounded-2xl font-black text-sm sm:text-base active:scale-95 transition-transform shadow-lg shadow-blue-200">套用設定</button>
+                                            <button onClick={handleClearFbConfig} className="flex-1 py-3 sm:py-4 bg-gray-200 text-gray-600 rounded-xl sm:rounded-2xl font-black text-sm sm:text-base active:scale-95 transition-transform">切回單機</button>
                                         </div>
                                     </div>
 
                                     <div className="h-px bg-gray-100 my-2"></div>
 
-                                    <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-6 bg-gray-900 text-white rounded-[24px] font-black text-lg flex items-center justify-center space-x-3 active:scale-95 shadow-xl transition-all"><Icon name="Download" size={28}/><span>匯出紀錄備份 (.json)</span></button>
+                                    <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-4 sm:py-6 bg-gray-900 text-white rounded-xl sm:rounded-[24px] font-black text-base sm:text-lg flex items-center justify-center space-x-2 sm:space-x-3 active:scale-95 shadow-xl transition-all"><Icon name="Download" className="w-6 h-6 sm:w-7 sm:h-7"/><span>匯出紀錄備份 (.json)</span></button>
                                     
                                     {!isFirebaseConfigured && (
-                                        <label className="w-full py-6 border-2 border-gray-200 text-gray-500 rounded-[24px] font-black text-lg flex items-center justify-center space-x-3 cursor-pointer active:bg-gray-50 transition-colors">
-                                            <Icon name="Upload" size={28}/><span>匯入紀錄檔</span>
+                                        <label className="w-full py-4 sm:py-6 border-2 border-gray-200 text-gray-500 rounded-xl sm:rounded-[24px] font-black text-base sm:text-lg flex items-center justify-center space-x-2 sm:space-x-3 cursor-pointer active:bg-gray-50 transition-colors">
+                                            <Icon name="Upload" className="w-6 h-6 sm:w-7 sm:h-7"/><span>匯入紀錄檔</span>
                                             <input type="file" className="hidden" accept=".json" onChange={handleImport} />
                                         </label>
                                     )}
-                                    <div className="text-center pt-2">
-                                        <p className="text-gray-400 font-black text-[10px] uppercase tracking-widest bg-gray-50 inline-block px-4 py-2 rounded-full border border-gray-100">
-                                            目前儲存模式: {isFirebaseConfigured ? <span className="text-blue-500">雲端模式 ({user?.uid?.substring(0,6)})</span> : <span className="text-orange-500">單機模式 (僅存瀏覽器)</span>}
-                                        </p>
-                                    </div>
                                 </div>
                             </div>
                         )}
 
-                        {/* 個股詳情 */}
+                        {/* 5. 個股詳情 */}
                         {view === 'detail' && selectedStockId && (
                             <div className="flex flex-col h-full animate-in slide-in-from-right bg-white overflow-hidden">
-                                <div className="p-5 flex items-center border-b border-gray-50 sticky top-0 bg-white z-10"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={40}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tight uppercase tracking-tighter">{selectedStockId} {stockMaster[selectedStockId]?.n}</h2><button onClick={() => { setFormCode(selectedStockId); setView('add'); }} className="p-1 text-blue-500 active:scale-90 transition-transform"><Icon name="Plus" size={40}/></button></div>
+                                <div className="p-4 sm:p-5 flex items-center border-b border-gray-50 sticky top-0 bg-white z-10"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" className="w-8 h-8 sm:w-10 sm:h-10"/></button><h2 className="flex-1 text-center font-black text-xl sm:text-2xl tracking-tighter uppercase">{selectedStockId} {stockMaster[selectedStockId]?.n}</h2><button onClick={() => { setFormCode(selectedStockId); setView('add'); }} className="p-1 text-blue-500 active:scale-90 transition-transform"><Icon name="Plus" className="w-8 h-8 sm:w-10 sm:h-10"/></button></div>
                                 {(() => {
                                     const d = stats.inv[selectedStockId];
                                     if (!d) return null;
@@ -538,18 +533,33 @@
                                     const avg = d.sh > 0 ? (d.cost / d.sh) : 0, divP = d.sh > 0 ? (d.div / d.sh) : 0, displayA = showWithDividend ? (avg - divP).toFixed(2) : avg.toFixed(2);
                                     return (
                                         <div className="flex-1 flex flex-col overflow-hidden">
-                                            <div className={`px-6 py-5 flex justify-between items-center ${m.c >= 0 ? 'bg-red-50' : 'bg-green-50'}`}><div className={`font-black text-3xl ${m.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{m.p} <span className="text-base font-bold ml-1">{m.c >= 0 ? '▲' : '▼'} {Math.abs(m.c)}</span></div><button onClick={()=>setShowWithDividend(!showWithDividend)} className="px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-black shadow-sm flex items-center space-x-1 transition-all active:scale-95">{showWithDividend ? <Icon name="ToggleRight" size={18} className="text-blue-500"/> : <Icon name="ToggleLeft" size={18} className="text-gray-300"/>} <span>{showWithDividend ? '含息' : '除息'}</span></button></div>
-                                            <div className="p-8 border-b border-gray-50"><p className="text-gray-400 text-sm font-black uppercase mb-1 leading-none">{showWithDividend ? '累積損益 (含息)' : '持股未實現損益'}</p><h3 className={`text-5xl font-black tabular-nums tracking-tighter`}><Mask val={profitToShow} /></h3>
-                                                <div className="grid grid-cols-3 gap-y-12 mt-12 text-center text-[13px]">
-                                                    <div className="text-left leading-tight"><p className="text-gray-400 font-black uppercase tracking-tight">{showWithDividend ? '含息成本' : '平均成本'}</p><p className="font-black text-2xl text-gray-800">{isMasked ? '***' : displayA}</p></div>
-                                                    <div><p className="text-gray-400 font-black uppercase text-blue-600">已實現損益</p><p className={`font-black text-2xl`}><Mask val={d.realized} /></p></div>
-                                                    <div className="text-right"><p className="text-gray-400 font-black uppercase">持股數</p><p className="font-black text-2xl text-gray-800">{d.sh.toLocaleString()}</p></div>
-                                                    <div className="text-left leading-tight"><p className="text-gray-400 font-black uppercase">今日盈虧</p><p className="font-black text-2xl"><Mask val={d.sh * m.c} /></p></div>
-                                                    <div><p className="text-gray-400 font-black uppercase">持股市值</p><p className="font-black text-2xl text-gray-800">{(d.sh * m.p).toLocaleString()}</p></div>
-                                                    <div className="text-right"><p className="text-gray-400 font-black uppercase text-red-500">累積配息</p><p className="font-black text-2xl text-gray-800">{d.div.toLocaleString()}</p></div>
+                                            <div className={`px-4 sm:px-6 py-4 sm:py-5 flex justify-between items-center ${m.c >= 0 ? 'bg-red-50' : 'bg-green-50'}`}><div className={`font-black text-2xl sm:text-3xl ${m.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{m.p} <span className="text-sm sm:text-base font-bold ml-1">{m.c >= 0 ? '▲' : '▼'} {Math.abs(m.c)}</span></div><button onClick={()=>setShowWithDividend(!showWithDividend)} className="px-2 py-1 sm:px-3 sm:py-1.5 rounded-lg sm:rounded-full bg-white border border-gray-200 text-[10px] sm:text-xs font-black shadow-sm flex items-center space-x-1 transition-all active:scale-95">{showWithDividend ? <Icon name="ToggleRight" className="w-4 h-4 sm:w-5 sm:h-5 text-blue-500"/> : <Icon name="ToggleLeft" className="w-4 h-4 sm:w-5 sm:h-5 text-gray-300"/>} <span>{showWithDividend ? '含息' : '除息'}</span></button></div>
+                                            <div className="p-6 sm:p-8 border-b border-gray-50"><p className="text-gray-400 text-xs sm:text-sm font-black uppercase mb-1 leading-none">{showWithDividend ? '累積損益 (含息)' : '持股未實現損益'}</p><h3 className={`text-4xl sm:text-5xl font-black tabular-nums tracking-tighter`}><Mask val={profitToShow} /></h3>
+                                                <div className="grid grid-cols-3 gap-y-6 sm:gap-y-12 mt-8 sm:mt-12 text-center text-[11px] sm:text-[13px]">
+                                                    <div className="text-left leading-tight"><p className="text-gray-400 font-black uppercase tracking-tight">{showWithDividend ? '含息成本' : '平均成本'}</p><p className="font-black text-lg sm:text-2xl text-gray-800 mt-0.5">{isMasked ? '***' : displayA}</p></div>
+                                                    <div><p className="text-gray-400 font-black uppercase text-blue-600">已實現損益</p><p className={`font-black text-lg sm:text-2xl mt-0.5`}><Mask val={d.realized} /></p></div>
+                                                    <div className="text-right"><p className="text-gray-400 font-black uppercase">持股數</p><p className="font-black text-lg sm:text-2xl text-gray-800 mt-0.5">{d.sh.toLocaleString()}</p></div>
+                                                    <div className="text-left leading-tight"><p className="text-gray-400 font-black uppercase">今日盈虧</p><p className="font-black text-lg sm:text-2xl mt-0.5"><Mask val={d.sh * m.c} /></p></div>
+                                                    <div><p className="text-gray-400 font-black uppercase">持股市值</p><p className="font-black text-lg sm:text-2xl text-gray-800 mt-0.5">{(d.sh * m.p).toLocaleString()}</p></div>
+                                                    <div className="text-right"><p className="text-gray-400 font-black uppercase text-red-500">累積配息</p><p className="font-black text-lg sm:text-2xl text-gray-800 mt-0.5">{d.div.toLocaleString()}</p></div>
                                                 </div>
                                             </div>
-                                            <div className="flex-1 overflow-y-auto bg-gray-50/40 pb-10"><div className="grid grid-cols-4 px-6 py-3 text-xs text-gray-400 font-black uppercase border-b border-gray-100 bg-white sticky top-0 z-10"><span>日期</span><span className="text-center">交易</span><span className="text-right">價格</span><span className="text-right">收支</span></div>{d.history.sort((a,b)=>b.timestamp-a.timestamp).map(tx => (<div key={tx.id} className="grid grid-cols-4 px-6 py-8 border-b border-gray-50 text-base items-center hover:bg-white group"><span className="font-black text-gray-400 text-sm">{tx.date.substring(5)}</span><span className="text-center font-black text-gray-800 text-xs">{tx.type} {tx.shares > 0 ? `${tx.shares.toLocaleString()}股` : ''}</span><span className="text-right font-black">{tx.price > 0 ? tx.price.toLocaleString() : '-'}</span><div className="text-right flex items-center justify-end space-x-4"><Mask val={tx.total} /><button onClick={() => setPendingDeleteId(tx.id)} className="text-gray-300 hover:text-red-400 transition-colors p-1"><Icon name="Trash" size={24}/></button></div></div>))}</div>
+                                            <div className="flex-1 overflow-y-auto bg-gray-50/40 pb-32 sm:pb-40">
+                                                <div className="flex px-4 sm:px-6 py-2 sm:py-3 text-[10px] sm:text-xs text-gray-400 font-black uppercase border-b border-gray-100 bg-white sticky top-0 z-10">
+                                                    <span className="w-[30%] sm:w-[35%]">日期</span><span className="w-[20%] text-center">交易</span><span className="w-[20%] text-right">價格</span><span className="w-[30%] sm:w-[25%] text-right">收支</span>
+                                                </div>
+                                                {d.history.sort((a,b)=>b.timestamp-a.timestamp).map(tx => (
+                                                    <div key={tx.id} className="flex px-4 sm:px-6 py-4 sm:py-6 border-b border-gray-50 items-center hover:bg-white transition-colors">
+                                                        <span className="w-[30%] sm:w-[35%] font-black text-gray-400 text-xs sm:text-sm pr-1 truncate">{tx.date.substring(5)}</span>
+                                                        <span className="w-[20%] text-center font-black text-gray-800 text-[10px] sm:text-xs leading-tight truncate">{tx.type}<br/>{tx.shares > 0 ? `${tx.shares.toLocaleString()}股` : ''}</span>
+                                                        <span className="w-[20%] text-right font-black text-sm sm:text-base px-1 truncate">{tx.price > 0 ? tx.price.toLocaleString() : '-'}</span>
+                                                        <div className="w-[30%] sm:w-[25%] flex items-center justify-end space-x-1 sm:space-x-3 truncate">
+                                                            <Mask val={tx.total} />
+                                                            <button onClick={() => setPendingDeleteId(tx.id)} className="text-gray-300 hover:text-red-400 transition-colors p-1"><Icon name="Trash" className="w-4 h-4 sm:w-5 sm:h-5"/></button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
                                     )
                                 })()}
@@ -557,61 +567,84 @@
                         )}
                     </div>
 
-                    {/* 懸浮導覽島 */}
-                    <div className="absolute bottom-8 left-6 right-6 h-20 bg-white/90 backdrop-blur-2xl border border-white/50 rounded-[32px] flex items-center justify-between px-6 z-50 shadow-2xl">
-                        <div className="flex flex-1 justify-around items-center pr-10">
-                            <button onClick={() => setView('holding')} className={`flex flex-col items-center ${view==='holding'?'text-blue-600':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="PieChart" size={28}/><span className="text-[9px] font-black mt-1 uppercase">持股</span></button>
-                            <button onClick={() => setView('record')} className={`flex flex-col items-center ${view==='record'?'text-blue-600':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="History" size={28}/><span className="text-[9px] font-black mt-1 uppercase">紀錄</span></button>
+                    {/* 懸浮導覽島 (Responsive) */}
+                    <div className="absolute bottom-4 sm:bottom-8 left-4 sm:left-6 right-4 sm:right-6 h-16 sm:h-20 bg-white/90 backdrop-blur-2xl border border-white/50 rounded-2xl sm:rounded-[32px] flex items-center justify-between px-2 sm:px-6 z-50 shadow-[0_20px_50px_rgba(0,0,0,0.1)]">
+                        <div className="flex flex-1 justify-around items-center pr-6 sm:pr-10">
+                            <button onClick={() => setView('holding')} className={`flex flex-col items-center ${view==='holding'?'text-blue-600':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="PieChart" className="w-6 h-6 sm:w-7 sm:h-7"/><span className="text-[9px] sm:text-[10px] font-black mt-1 uppercase">持股</span></button>
+                            <button onClick={() => setView('record')} className={`flex flex-col items-center ${view==='record'?'text-blue-600':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="History" className="w-6 h-6 sm:w-7 sm:h-7"/><span className="text-[9px] sm:text-[10px] font-black mt-1 uppercase">紀錄</span></button>
                         </div>
-                        <div className="flex flex-1 justify-around items-center pl-10">
-                            <button onClick={() => setView('dividend')} className={`flex flex-col items-center ${view==='dividend'?'text-blue-600':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="Coins" size={28}/><span className="text-[9px] font-black mt-1 uppercase">股息</span></button>
-                            <button onClick={syncMarketData} className={`flex flex-col items-center ${isUpdating?'animate-spin text-blue-400':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="Refresh" size={28}/><span className="text-[9px] font-black mt-1 uppercase">同步</span></button>
+                        <div className="flex flex-1 justify-around items-center pl-6 sm:pl-10">
+                            <button onClick={() => setView('dividend')} className={`flex flex-col items-center ${view==='dividend'?'text-blue-600':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="Coins" className="w-6 h-6 sm:w-7 sm:h-7"/><span className="text-[9px] sm:text-[10px] font-black mt-1 uppercase">股息</span></button>
+                            <button onClick={syncMarketData} className={`flex flex-col items-center ${isUpdating?'animate-spin text-blue-400':'text-gray-300'} active:scale-95 transition-transform`}><Icon name="Refresh" className="w-6 h-6 sm:w-7 sm:h-7"/><span className="text-[9px] sm:text-[10px] font-black mt-1 uppercase">同步</span></button>
                         </div>
                     </div>
-                    <button onClick={() => setView('add')} className="absolute bottom-10 left-1/2 -translate-x-1/2 w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white z-[60] shadow-xl border-[6px] border-gray-50 active:scale-90 transition-all">
-                        <Icon name="Plus" size={48}/>
+                    {/* FAB */}
+                    <button onClick={() => setView('add')} className="absolute bottom-6 sm:bottom-10 left-1/2 -translate-x-1/2 w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white z-[60] shadow-xl border-[4px] sm:border-[6px] border-white active:scale-90 transition-all">
+                        <Icon name="Plus" className="w-8 h-8 sm:w-10 sm:h-10"/>
                     </button>
 
-                    {/* 新增紀錄彈窗 */}
+                    {/* 新增紀錄彈窗 (Responsive) */}
                     <div className={`absolute inset-0 bg-white z-[100] flex flex-col transition-all duration-300 transform ${view === 'add' ? 'translate-y-0' : 'translate-y-full pointer-events-none'}`}>
-                        <div className="p-5 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')}><Icon name="ChevronLeft" size={40}/></button><h2 className="flex-1 text-center font-black text-2xl uppercase tracking-tighter">新增紀錄</h2><div className="w-10"></div></div>
-                        <div className="p-10 space-y-12 flex-1 overflow-y-auto pb-48 bg-white">
-                            <div className="space-y-4">
-                                <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase w-20">股票代號</label><input className="flex-1 bg-gray-50 p-6 rounded-[24px] outline-none font-black text-2xl uppercase" placeholder="如 2330" value={formCode} onChange={e=>setFormCode(e.target.value)} /></div>
-                                <div className="ml-28 font-black text-blue-600 text-xl">{isSearchingName ? "搜尋中..." : (stockMaster[formCode.toUpperCase()]?.n || "輸入代號確認")}</div>
+                        <div className="p-4 sm:p-5 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')}><Icon name="ChevronLeft" className="w-8 h-8 sm:w-10 sm:h-10"/></button><h2 className="flex-1 text-center font-black text-xl sm:text-2xl uppercase tracking-tighter">新增紀錄</h2><div className="w-8 sm:w-10"></div></div>
+                        <div className="p-6 sm:p-10 space-y-8 sm:space-y-12 flex-1 overflow-y-auto pb-40 bg-white">
+                            <div className="space-y-3 sm:space-y-4">
+                                <div className="flex items-center space-x-3 sm:space-x-6">
+                                    <label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">股票代號</label>
+                                    <input className="flex-1 bg-gray-50 p-4 sm:p-6 rounded-xl sm:rounded-[24px] outline-none font-black text-xl sm:text-2xl uppercase" placeholder="如 2330" value={formCode} onChange={e=>setFormCode(e.target.value)} />
+                                </div>
+                                <div className="ml-[68px] sm:ml-[104px] font-black text-blue-600 text-base sm:text-xl">{isSearchingName ? "搜尋中..." : (stockMaster[formCode.toUpperCase()]?.n || "輸入代號確認")}</div>
                             </div>
-                            <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交日期</label><div className="flex-1 relative"><input type="date" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-xl" value={formDate} onChange={e=>setFormDate(e.target.value)} /><Icon name="Calendar" className="absolute right-6 top-6 text-gray-300 pointer-events-none" size={24}/></div></div>
-                            <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase w-20 shrink-0">交易動作</label><div className="flex space-x-4">{['買進','賣出','配息'].map(t=>(<button key={t} onClick={()=>setActiveTab(t)} className={`px-10 py-4 rounded-full text-lg font-black transition-all ${activeTab===t?'bg-blue-600 text-white shadow-xl':'bg-gray-100 text-gray-400'}`}>{t}</button>))}</div></div>
-                            <div className="space-y-10">
+                            <div className="flex items-center space-x-3 sm:space-x-6">
+                                <label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">成交日期</label>
+                                <div className="flex-1 relative">
+                                    <input type="date" className="w-full bg-gray-50 p-4 sm:p-6 rounded-xl sm:rounded-[24px] outline-none font-black text-base sm:text-xl" value={formDate} onChange={e=>setFormDate(e.target.value)} />
+                                    <Icon name="Calendar" className="absolute right-4 sm:right-6 top-4 sm:top-6 text-gray-300 pointer-events-none w-5 h-5 sm:w-6 sm:h-6"/>
+                                </div>
+                            </div>
+                            <div className="flex items-center space-x-3 sm:space-x-6">
+                                <label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 shrink-0 leading-tight">交易動作</label>
+                                <div className="flex flex-1 space-x-2 sm:space-x-4">
+                                    {['買進','賣出','配息'].map(t=>(<button key={t} onClick={()=>setActiveTab(t)} className={`flex-1 py-3 sm:py-4 rounded-xl sm:rounded-full text-sm sm:text-lg font-black transition-all ${activeTab===t?'bg-blue-600 text-white shadow-md':'bg-gray-100 text-gray-400'}`}>{t}</button>))}
+                                </div>
+                            </div>
+                            <div className="space-y-6 sm:space-y-10 mt-6">
                                 {activeTab === '配息' ? (
                                     <React.Fragment>
-                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20 leading-none">配發金額</label><input type="number" value={formTotalAmount} onChange={e=>setFormTotalAmount(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl text-blue-600" placeholder="0" /></div>
-                                        <div className="text-center text-gray-200 font-bold text-xs uppercase tracking-[5px]">或是計算</div>
-                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">每股股息</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0.00" /></div>
-                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">除息股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">配發金額</label><input type="number" value={formTotalAmount} onChange={e=>setFormTotalAmount(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl text-blue-600" placeholder="0" /></div>
+                                        <div className="text-center text-gray-200 font-bold text-[9px] sm:text-xs uppercase tracking-[3px] sm:tracking-[5px]">或是計算</div>
+                                        <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">每股股息</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0.00" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">除息股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0" /></div>
                                     </React.Fragment>
                                 ) : (
                                     <React.Fragment>
-                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交價格</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0.00" /></div>
-                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">成交價格</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0.00" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">成交股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0" /></div>
                                     </React.Fragment>
                                 )}
                             </div>
-                            <div className="bg-blue-50/50 p-10 rounded-[40px] border border-blue-100/50"><div className="flex justify-between font-black text-blue-900 items-baseline"><span>{activeTab==='買進'?'預計總支出':activeTab==='賣出'?'預計總收入':'最終入帳'}</span><span className="text-5xl tabular-nums tracking-tighter">$ {Math.abs(calc.total).toLocaleString()}</span></div></div>
+                            <div className="bg-blue-50/50 p-6 sm:p-10 rounded-2xl sm:rounded-[40px] border border-blue-100/50 mt-8">
+                                <div className="flex justify-between font-black text-blue-900 items-baseline">
+                                    <span className="text-sm sm:text-base">{activeTab==='買進'?'總支出':activeTab==='賣出'?'總收入':'最終入帳'}</span>
+                                    <span className="text-3xl sm:text-5xl tabular-nums tracking-tighter">$ {Math.abs(calc.total).toLocaleString()}</span>
+                                </div>
+                            </div>
                         </div>
-                        <div className="absolute bottom-0 left-0 right-0 p-8 grid grid-cols-2 gap-5 border-t border-gray-100 bg-white/95 backdrop-blur-md z-10 shadow-2xl"><button onClick={()=>saveTx(true)} className="py-6 border-2 border-blue-600 text-blue-600 rounded-[24px] font-black text-xl active:scale-95 transition-transform">再記一筆</button><button onClick={()=>saveTx(false)} className="py-6 bg-blue-600 text-white rounded-[24px] font-black text-xl shadow-xl shadow-blue-100 active:scale-95 transition-transform">完成存檔</button></div>
+                        <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-8 grid grid-cols-2 gap-3 sm:gap-5 border-t border-gray-100 bg-white/95 backdrop-blur-md z-10 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
+                            <button onClick={()=>saveTx(true)} className="py-4 sm:py-6 border-2 border-blue-600 text-blue-600 rounded-xl sm:rounded-[24px] font-black text-base sm:text-xl active:scale-95 transition-transform">再記一筆</button>
+                            <button onClick={()=>saveTx(false)} className="py-4 sm:py-6 bg-blue-600 text-white rounded-xl sm:rounded-[24px] font-black text-base sm:text-xl shadow-lg shadow-blue-100 active:scale-95 transition-transform">完成存檔</button>
+                        </div>
                     </div>
 
-                    {/* 刪除確認彈窗 */}
+                    {/* 刪除確認彈窗 (Responsive) */}
                     {pendingDeleteId && (
-                        <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-[200] flex items-center justify-center p-8">
-                            <div className="bg-white w-full max-w-xs rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95">
-                                <div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500"><Icon name="AlertCircle" size={32} /></div>
-                                <h3 className="text-2xl font-black text-center mb-2 text-gray-800 tracking-tighter">確定刪除紀錄？</h3>
-                                <p className="text-gray-500 text-center mb-8 font-bold text-sm">刪除後資料將無法還原，且會重新計算資產數據。</p>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <button onClick={()=>setPendingDeleteId(null)} className="py-4 bg-gray-100 rounded-2xl font-black text-gray-500 active:scale-95 transition-transform">取消</button>
-                                    <button onClick={confirmDelete} className="py-4 bg-red-500 rounded-2xl font-black text-white shadow-lg active:scale-95 transition-transform">確認刪除</button>
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
+                            <div className="bg-white w-full max-w-xs rounded-2xl sm:rounded-[32px] p-6 sm:p-8 shadow-2xl animate-in zoom-in-95">
+                                <div className="bg-red-50 w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center mx-auto mb-4 sm:mb-6 text-red-500"><Icon name="AlertCircle" className="w-6 h-6 sm:w-8 sm:h-8" /></div>
+                                <h3 className="text-xl sm:text-2xl font-black text-center mb-2 text-gray-800 tracking-tighter">確定刪除紀錄？</h3>
+                                <p className="text-gray-500 text-center mb-6 sm:mb-8 font-bold text-xs sm:text-sm">刪除後資料將無法還原，且會重新計算資產數據。</p>
+                                <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                                    <button onClick={()=>setPendingDeleteId(null)} className="py-3 sm:py-4 bg-gray-100 rounded-xl sm:rounded-2xl font-black text-gray-500 text-sm sm:text-base active:scale-95 transition-transform">取消</button>
+                                    <button onClick={confirmDelete} className="py-3 sm:py-4 bg-red-500 rounded-xl sm:rounded-2xl font-black text-white text-sm sm:text-base shadow-md active:scale-95 transition-transform">確認刪除</button>
                                 </div>
                             </div>
                         </div>
