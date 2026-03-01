@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <!-- 加入 viewport-fit=cover 讓 iPhone 識別安全區域，並禁止縮放 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Stockify 專業版 v4.3.2</title>
+    <title>Stockify 專業版 v4.3.3</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -96,7 +96,7 @@
             db = firebase.firestore();
         }
 
-        const APP_VERSION = 'v4.3.2 (Mobile Fix)';
+        const APP_VERSION = 'v4.3.3';
         const TOKEN_KEY = 'stockify_token';
         const MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0wMSAwMjowOTo0OCIsInVzZXJfaWQiOiJob25nYm95IiwiZW1haWwiOiJob25nYm95OTJAZ21haWwuY29tIiwiaXAiOiI2MS4yMjAuOTMuNzQifQ.Mk4GPZsGRLM79QvxVHIcRXE5y_FThk9uMCsoJfmQCYc";
         const STORAGE_KEY = 'stockify_v4_txs';
@@ -275,14 +275,26 @@
 
             const calc = useMemo(() => {
                 if (activeTab === '配息') {
-                    if (formTotalAmount) return { total: parseFloat(formTotalAmount), fee: 0 };
-                    return { total: (parseFloat(formPrice)||0) * (parseInt(formShares)||0) - (parseFloat(formFee)||0), fee: parseFloat(formFee)||0 };
+                    if (formTotalAmount) return { total: Math.round(parseFloat(formTotalAmount) || 0), fee: 0, autoFee: 0 };
+                    return { 
+                        total: Math.round((parseFloat(formPrice)||0) * (parseInt(formShares)||0) - (parseFloat(formFee)||0)), 
+                        fee: parseFloat(formFee)||0, 
+                        autoFee: 0 
+                    };
                 }
                 const amt = (parseFloat(formPrice)||0) * (parseInt(formShares)||0);
-                let f = Math.floor(amt * 0.001425 * 0.6); if (f < 20 && amt > 0) f = 20;
+                
+                // 自動計算預估手續費與稅
+                let autoF = Math.floor(amt * 0.001425 * 0.6); if (autoF < 20 && amt > 0) autoF = 20;
                 let tr = 0.003; if (formCode.endsWith('B')) tr = 0; else if (formCode.startsWith('00')) tr = 0.001;
-                const tax = activeTab === '賣出' ? Math.floor(amt * tr) : 0;
-                return { total: activeTab === '買進' ? -(amt + f) : (amt - f - tax), fee: f + tax };
+                const autoTax = activeTab === '賣出' ? Math.floor(amt * tr) : 0;
+                const autoTotalFee = autoF + autoTax;
+
+                // 若使用者有自訂手續費則優先使用，否則套用自動計算值
+                const finalFee = formFee !== '' ? (parseFloat(formFee) || 0) : autoTotalFee;
+                const finalTotal = activeTab === '買進' ? -(amt + finalFee) : (amt - finalFee);
+
+                return { total: Math.round(finalTotal), fee: finalFee, autoFee: autoTotalFee };
             }, [formPrice, formShares, formFee, formTotalAmount, activeTab, formCode]);
 
             const saveTx = async (stay) => {
@@ -632,7 +644,7 @@
                             <div className="flex items-center space-x-3 sm:space-x-6">
                                 <label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 shrink-0 leading-tight">交易動作</label>
                                 <div className="flex flex-1 space-x-2 sm:space-x-4">
-                                    {['買進','賣出','配息'].map(t=>(<button key={t} onClick={()=>setActiveTab(t)} className={`flex-1 py-3 sm:py-4 rounded-xl sm:rounded-full text-sm sm:text-lg font-black transition-all ${activeTab===t?'bg-blue-600 text-white shadow-md':'bg-gray-100 text-gray-400'}`}>{t}</button>))}
+                                    {['買進','賣出','配息'].map(t=>(<button key={t} onClick={()=>{setActiveTab(t); setFormFee(''); setFormTotalAmount('');}} className={`flex-1 py-3 sm:py-4 rounded-xl sm:rounded-full text-sm sm:text-lg font-black transition-all ${activeTab===t?'bg-blue-600 text-white shadow-md':'bg-gray-100 text-gray-400'}`}>{t}</button>))}
                                 </div>
                             </div>
                             <div className="space-y-6 sm:space-y-10 mt-6">
@@ -642,11 +654,16 @@
                                         <div className="text-center text-gray-200 font-bold text-[9px] sm:text-xs uppercase tracking-[3px] sm:tracking-[5px]">或是計算</div>
                                         <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">每股股息</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0.00" /></div>
                                         <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">除息股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">匯費/手續費</label><input type="number" value={formFee} onChange={e=>setFormFee(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="10" /></div>
                                     </React.Fragment>
                                 ) : (
                                     <React.Fragment>
                                         <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">成交價格</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0.00" /></div>
                                         <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6"><label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">成交股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl" placeholder="0" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-4 sm:pb-6">
+                                            <label className="text-gray-400 font-black text-[10px] sm:text-sm uppercase w-14 sm:w-20 leading-tight">手續費/稅</label>
+                                            <input type="number" value={formFee} onChange={e=>setFormFee(e.target.value)} className="flex-1 ml-4 sm:ml-8 outline-none font-black text-2xl sm:text-3xl text-gray-500" placeholder={calc.autoFee > 0 ? calc.autoFee.toString() : "預估自動計算"} />
+                                        </div>
                                     </React.Fragment>
                                 )}
                             </div>
