@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Stockify 專業版 v4.2.6</title>
+    <title>Stockify 專業版 v4.2.7</title>
     
     <!-- 1. 引入必要的函式庫 (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -34,19 +34,24 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        // --- Firebase 設定 ---
-        // (進階功能) 若您未來想啟用雲端跨裝置同步，可在此填寫您的 Firebase API Key。不填寫則預設使用單機模式。
-        const firebaseConfig = window.__firebase_config ? JSON.parse(window.__firebase_config) : {
+        // --- Firebase 設定 (支援本地儲存自訂設定) ---
+        const localFbConfigStr = localStorage.getItem('stockify_firebase_config');
+        let parsedLocalFbConfig = null;
+        try {
+            if (localFbConfigStr) parsedLocalFbConfig = JSON.parse(localFbConfigStr);
+        } catch(e) { console.warn("Failed to parse local firebase config"); }
+
+        const firebaseConfig = parsedLocalFbConfig || (window.__firebase_config ? JSON.parse(window.__firebase_config) : {
             apiKey: "",
             authDomain: "",
             projectId: "",
             storageBucket: "",
             messagingSenderId: "",
             appId: ""
-        };
+        });
 
         // 安全防護：檢查是否有填寫 API Key (決定使用單機或雲端)
-        const isFirebaseConfigured = firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "";
+        const isFirebaseConfigured = firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "";
         
         let auth = null;
         let db = null;
@@ -59,7 +64,7 @@
             db = firebase.firestore();
         }
 
-        const APP_VERSION = 'v4.2.6';
+        const APP_VERSION = 'v4.2.7';
         const TOKEN_KEY = 'stockify_token';
         
         // 預設 FinMind Token (使用者可於設定中更改)
@@ -89,7 +94,8 @@
                 AlertCircle: <React.Fragment><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></React.Fragment>,
                 Loader2: <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/>,
                 CheckCircle2: <React.Fragment><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="m9 12 2 2 4-4"/></React.Fragment>,
-                Upload: <React.Fragment><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5-5-5-5 5m5-5v12"/></React.Fragment>
+                Upload: <React.Fragment><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5-5-5-5 5m5-5v12"/></React.Fragment>,
+                Cloud: <React.Fragment><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></React.Fragment>
             };
             return (
                 <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -107,6 +113,7 @@
             const [stockMaster, setStockMaster] = useState({}); 
             const [marketData, setMarketData] = useState({}); 
             const [apiToken, setApiToken] = useState(''); // 初始化為空，待讀取 local storage
+            const [fbConfigInput, setFbConfigInput] = useState(localFbConfigStr || ''); // Firebase 設定輸入框
             const [isUpdating, setIsUpdating] = useState(false);
             const [isMasked, setIsMasked] = useState(false);
             const [showWithDividend, setShowWithDividend] = useState(true); 
@@ -317,6 +324,27 @@
                 setApiToken(token); 
                 localStorage.setItem(TOKEN_KEY, token); 
             };
+            
+            // 儲存 Firebase 設定
+            const handleSaveFbConfig = () => {
+                if(!fbConfigInput.trim()) return;
+                try {
+                    const parsed = JSON.parse(fbConfigInput);
+                    if (!parsed.apiKey) throw new Error("缺少 apiKey 屬性");
+                    localStorage.setItem('stockify_firebase_config', fbConfigInput);
+                    alert("Firebase 雲端設定已儲存！網頁將重新載入以套用設定。");
+                    window.location.reload();
+                } catch(e) {
+                    alert("請輸入有效的 JSON 格式設定！\n錯誤: " + e.message);
+                }
+            };
+
+            // 清除 Firebase 設定 (切回單機)
+            const handleClearFbConfig = () => {
+                localStorage.removeItem('stockify_firebase_config');
+                alert("已切換回單機模式！網頁將重新載入。");
+                window.location.reload();
+            };
 
             // 匯入資料 (單機模式下有用)
             const handleImport = (e) => {
@@ -348,7 +376,7 @@
                                 <div className="p-5 flex justify-between items-center border-b border-gray-50 bg-white sticky top-0 z-20">
                                     <div className="flex flex-col">
                                         <h1 className="text-3xl font-black italic text-gray-800 tracking-tighter">St<span className="text-blue-600">o</span>ckify</h1>
-                                        <p className="text-[10px] text-gray-400 font-bold ml-1 uppercase tracking-widest">{APP_VERSION} • {isFirebaseConfigured ? 'Cloud' : 'Local'}</p>
+                                        <p className="text-[10px] text-gray-400 font-bold ml-1 uppercase tracking-widest">{APP_VERSION} • {isFirebaseConfigured ? <span className="text-blue-500">Cloud</span> : 'Local'}</p>
                                     </div>
                                     <div className="flex space-x-2">
                                         <button onClick={() => setIsMasked(!isMasked)} className="p-2 text-gray-300 active:scale-95"><Icon name="RotateCcw" size={24}/></button>
@@ -373,7 +401,7 @@
                                     <div className="text-center"><p className="text-gray-400 font-black text-[10px] uppercase text-red-500">累積配息</p><p className="font-black text-xl text-gray-800">{isMasked ? '****' : stats.td.toLocaleString()}</p></div>
                                 </div>
                                 <div className="flex-1 overflow-y-auto pb-40">
-                                    <div className="grid grid-cols-4 px-6 py-3 text-[10px] text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10"><span>標的 / 股數</span><span className="text-right">現價</span><span className="text-right">成本</span><span className="text-right">損益</span></div>
+                                    <div className="grid grid-cols-4 px-6 py-3 text-[10px] text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10"><span>標的 / 股數</span><span className="text-right">現價</span><span className="text-right">{showWithDividend ? '含息成本' : '平均成本'}</span><span className="text-right">損益</span></div>
                                     {Object.entries(stats.inv).map(([id, d]) => d.sh > 0 && (
                                         <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="grid grid-cols-4 px-6 py-5 border-b border-gray-50 items-center active:bg-gray-50 cursor-pointer">
                                             <div><p className="font-black text-lg leading-tight">{d.n}</p><p className="text-xs text-gray-400">{id} / {d.sh.toLocaleString()}股</p></div>
@@ -454,23 +482,43 @@
                         {view === 'settings' && (
                             <div className="absolute inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-right duration-300">
                                 <div className="p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tighter uppercase text-gray-800">設定選項</h2><div className="w-10"></div></div>
-                                <div className="p-10 space-y-8 flex-1 overflow-y-auto">
+                                <div className="p-10 space-y-8 flex-1 overflow-y-auto pb-40">
+                                    {/* FinMind API 設定 */}
                                     <div className="space-y-3">
-                                        <label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Key" size={20} className="mr-2"/> FinMind 查詢金鑰</label>
+                                        <label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Key" size={20} className="mr-2"/> FinMind 股價查詢金鑰</label>
                                         <input type="password" placeholder="請貼上 FinMind API Token" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-lg border-2 border-transparent focus:border-blue-200 transition-all" value={apiToken} onChange={e => handleSaveToken(e.target.value)} />
                                         <p className="text-xs text-gray-400 font-bold px-2">※ 無設定金鑰時無法更新最新股價。</p>
                                     </div>
+                                    
                                     <div className="h-px bg-gray-100 my-2"></div>
+                                    
+                                    {/* Firebase 雲端設定 */}
+                                    <div className="space-y-3">
+                                        <label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Cloud" size={20} className="mr-2 text-blue-500"/> Firebase 雲端同步金鑰 (JSON)</label>
+                                        <textarea 
+                                            placeholder='{"apiKey": "...", "authDomain": "...", "projectId": "..."}' 
+                                            className="w-full h-32 bg-blue-50/50 p-4 rounded-[24px] outline-none font-mono text-xs border-2 border-transparent focus:border-blue-200 transition-all resize-none text-gray-600" 
+                                            value={fbConfigInput} 
+                                            onChange={e => setFbConfigInput(e.target.value)} 
+                                        />
+                                        <div className="flex space-x-3">
+                                            <button onClick={handleSaveFbConfig} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black active:scale-95 transition-transform shadow-lg shadow-blue-200">套用雲端設定</button>
+                                            <button onClick={handleClearFbConfig} className="flex-1 py-4 bg-gray-200 text-gray-600 rounded-2xl font-black active:scale-95 transition-transform">清除 (切回單機)</button>
+                                        </div>
+                                    </div>
+
+                                    <div className="h-px bg-gray-100 my-2"></div>
+
+                                    {/* 備份與匯入 */}
                                     <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-6 bg-gray-900 text-white rounded-[24px] font-black text-lg flex items-center justify-center space-x-3 active:scale-95 shadow-xl transition-all"><Icon name="Download" size={28}/><span>匯出紀錄備份 (.json)</span></button>
                                     
-                                    {/* 僅單機模式開放匯入，避免與 Firebase 衝突 */}
                                     {!isFirebaseConfigured && (
                                         <label className="w-full py-6 border-2 border-gray-200 text-gray-500 rounded-[24px] font-black text-lg flex items-center justify-center space-x-3 cursor-pointer active:bg-gray-50 transition-colors">
                                             <Icon name="Upload" size={28}/><span>匯入紀錄檔</span>
                                             <input type="file" className="hidden" accept=".json" onChange={handleImport} />
                                         </label>
                                     )}
-                                    <div className="text-center pt-4">
+                                    <div className="text-center pt-2">
                                         <p className="text-gray-400 font-black text-[10px] uppercase tracking-widest bg-gray-50 inline-block px-4 py-2 rounded-full">
                                             資料儲存模式: {isFirebaseConfigured ? <span className="text-blue-500">雲端模式 ({user?.uid?.substring(0,6)})</span> : <span className="text-orange-500">單機模式 (LocalStorage)</span>}
                                         </p>
