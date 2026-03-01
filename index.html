@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Stockify 專業版 v4.3.6</title>
+    <title>Stockify 專業版 v4.3.8</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -17,15 +17,17 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         
+        /* 🔥 全面適配 iOS：鎖死視口與滾動 🔥 */
         html, body {
             position: fixed;
             top: 0; bottom: 0; left: 0; right: 0;
             width: 100%; height: 100%;
             margin: 0; padding: 0;
-            overflow: hidden;
+            overflow: hidden; 
             background-color: #f3f4f6;
             font-family: 'Inter', "Microsoft JhengHei", sans-serif;
             -webkit-tap-highlight-color: transparent;
+            overscroll-behavior: none; /* 禁用彈回動畫 */
         }
         
         #root { width: 100%; height: 100%; }
@@ -41,12 +43,15 @@
 
         .nav-island { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
         .fab-btn { bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
-        .content-pb { padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px)); }
+        .content-pb { padding-bottom: calc(140px + env(safe-area-inset-bottom, 0px)); }
 
         @media (min-width: 640px) {
             .nav-island { bottom: 32px; }
             .fab-btn { bottom: 40px; }
         }
+        
+        /* 避免寬度超出產生左右滑動 */
+        * { box-sizing: border-box; }
         
         input[type=number]::-webkit-inner-spin-button, 
         input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -75,7 +80,7 @@
             db = firebase.firestore();
         }
 
-        const APP_VERSION = 'v4.3.6';
+        const APP_VERSION = 'v4.3.8';
         const APP_ID = 'stockify-v4';
         const TOKEN_KEY = 'stockify_token';
         const MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0wMSAwMjowOTo0OCIsInVzZXJfaWQiOiJob25nYm95IiwiZW1haWwiOiJob25nYm95OTJAZ21haWwuY29tIiwiaXAiOiI2MS4yMjAuOTMuNzQifQ.Mk4GPZsGRLM79QvxVHIcRXE5y_FThk9uMCsoJfmQCYc";
@@ -136,6 +141,7 @@
             const [formShares, setFormShares] = useState('');   
             const [formFee, setFormFee] = useState('');         
             const [isSearchingName, setIsSearchingName] = useState(false);
+            
             const [isSaving, setIsSaving] = useState(false);
             const [toastMsg, setToastMsg] = useState('');
 
@@ -152,7 +158,7 @@
                 }
                 const unsubscribe = auth.onAuthStateChanged(async (currUser) => {
                     if (!currUser) {
-                        try { await auth.signInAnonymously(); } catch (e) { console.error(e); }
+                        try { await auth.signInAnonymously(); } catch (e) {}
                     } else {
                         setUser(currUser);
                         setIsCloudLoading(false);
@@ -219,7 +225,7 @@
             useEffect(() => {
                 const code = formCode.toUpperCase();
                 if (code.length < 2) return;
-                const t = setTimeout(() => fetchStockInfo(code), 500);
+                const t = setTimeout(() => fetchStockInfo(code), 300); // 縮短防抖時間，加快反應
                 return () => clearTimeout(t);
             }, [formCode, apiToken]);
 
@@ -264,46 +270,58 @@
                 return { total: Math.round(finalTotal), fee: finalFee, autoFee: autoTotalFee };
             }, [formPrice, formShares, formFee, formTotalAmount, activeTab, formCode]);
 
+            // --- 🚀 關鍵優化：樂觀存檔 (不再等待雲端回傳才解放 UI) ---
             const saveTx = async (stay) => {
                 if (!formCode || (activeTab !== '配息' && (!formPrice || !formShares))) {
-                    alert("請確實填寫資料"); return;
+                    alert("請正確填寫代號與股數/金額"); return;
                 }
-                setIsSaving(true);
+                
                 const code = formCode.toUpperCase();
                 const newTx = {
                     stockId: code, stockName: stockMaster[code]?.n || `標的 ${code}`,
                     type: activeTab, price: parseFloat(formPrice)||0, shares: parseInt(formShares)||0,
                     total: calc.total, date: formDate.replace(/-/g, '/'), timestamp: Date.now()
                 };
-                try {
-                    if (isFirebaseConfigured && user && db) {
-                        await db.collection('artifacts').doc(APP_ID).collection('users').doc(user.uid).collection('transactions').add(newTx);
-                    } else {
-                        newTx.id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-                        const updated = [newTx, ...transactions];
-                        setTransactions(updated);
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+
+                // 1. 立即清空/重置 UI (不等待雲端回傳)
+                if (stay) {
+                    setFormPrice(''); setFormShares(''); setFormFee(''); setFormTotalAmount('');
+                    setToastMsg('🎉 儲存中...');
+                    setTimeout(() => setToastMsg(''), 2000);
+                } else {
+                    setView('holding');
+                    setFormCode(''); setFormPrice(''); setFormShares(''); setFormFee(''); setFormTotalAmount('');
+                }
+
+                // 2. 背景非同步儲存 (Fire and Forget)
+                const runCloudSave = async () => {
+                    try {
+                        if (isFirebaseConfigured && user && db) {
+                            await db.collection('artifacts').doc(APP_ID).collection('users').doc(user.uid).collection('transactions').add(newTx);
+                        } else {
+                            newTx.id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+                            const updated = [newTx, ...transactions];
+                            setTransactions(updated);
+                            localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+                        }
+                    } catch (e) {
+                        console.error("Save failed in background", e);
+                        alert("部分資料儲存失敗，請檢查網路！");
                     }
-                    if (stay) {
-                        setFormPrice(''); setFormShares(''); setFormFee(''); setFormTotalAmount('');
-                        setToastMsg('🎉 儲存成功！');
-                        setTimeout(() => setToastMsg(''), 2000);
-                    } else {
-                        setFormCode(''); setFormPrice(''); setFormShares(''); setFormFee(''); setFormTotalAmount('');
-                        setView('holding');
-                    }
-                } catch (e) { alert("儲存失敗"); } finally { setIsSaving(false); }
+                };
+                runCloudSave(); 
             };
 
             const confirmDelete = async () => {
-                if (isFirebaseConfigured && user && db && pendingDeleteId) {
-                    await db.collection('artifacts').doc(APP_ID).collection('users').doc(user.uid).collection('transactions').doc(pendingDeleteId).delete();
+                const idToDelete = pendingDeleteId;
+                setPendingDeleteId(null); // 立即關閉視窗
+                if (isFirebaseConfigured && user && db && idToDelete) {
+                    await db.collection('artifacts').doc(APP_ID).collection('users').doc(user.uid).collection('transactions').doc(idToDelete).delete();
                 } else {
-                    const updated = transactions.filter(t => t.id !== pendingDeleteId);
+                    const updated = transactions.filter(t => t.id !== idToDelete);
                     setTransactions(updated);
                     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
                 }
-                setPendingDeleteId(null);
             };
 
             const handleSaveToken = (t) => { setApiToken(t); localStorage.setItem(TOKEN_KEY, t); };
@@ -319,40 +337,35 @@
             };
             const handleClearFbConfig = () => { localStorage.removeItem('stockify_firebase_config'); window.location.reload(); };
 
-            // 🎯 智慧匯入功能 (單機/雲端同步)
             const handleImport = (e) => {
                 const reader = new FileReader();
                 reader.onload = async (ev) => { 
                     try {
                         const importedData = JSON.parse(ev.target.result);
                         if(!Array.isArray(importedData)) throw new Error("Format error");
-                        
+                        setIsSaving(true);
                         if (isFirebaseConfigured && user && db) {
-                            setIsSaving(true);
                             const txCollection = db.collection('artifacts').doc(APP_ID).collection('users').doc(user.uid).collection('transactions');
                             const batch = db.batch();
                             importedData.forEach(item => {
                                 const { id, ...cleanItem } = item;
-                                const newDoc = txCollection.doc();
-                                batch.set(newDoc, cleanItem);
+                                const newDoc = txCollection.doc(); batch.set(newDoc, cleanItem);
                             });
                             await batch.commit();
                             alert("雲端資料同步完成！");
                         } else {
-                            setTransactions(importedData);
-                            localStorage.setItem(STORAGE_KEY, JSON.stringify(importedData));
+                            setTransactions(importedData); localStorage.setItem(STORAGE_KEY, JSON.stringify(importedData));
                             alert("單機資料匯入完成！");
                         }
                         setView('holding');
-                    } catch (err) { alert("匯入失敗：" + err.message); }
-                    finally { setIsSaving(false); }
+                    } catch (err) { alert("匯入失敗"); } finally { setIsSaving(false); }
                 };
                 if(e.target.files[0]) reader.readAsText(e.target.files[0]);
             };
 
             const Mask = ({ val }) => isMasked ? "****" : <span className={val >= 0 ? 'text-red-500' : 'text-green-600'}>{val.toLocaleString(undefined, {maximumFractionDigits:0})}</span>;
 
-            if (isCloudLoading || isSaving) return <div className="h-full w-full flex flex-col items-center justify-center bg-white"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div><p className="font-black text-blue-500 italic uppercase">Syncing...</p></div>;
+            if (isCloudLoading || isSaving) return <div className="h-full w-full flex flex-col items-center justify-center bg-white"><div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div><p className="font-black text-blue-500 italic uppercase tracking-widest">Syncing Cloud...</p></div>;
 
             return (
                 <div className="app-container h-full w-full max-w-screen-sm mx-auto flex flex-col relative bg-white overflow-hidden shadow-2xl">
@@ -364,7 +377,7 @@
                                 <div className="p-4 sm:p-6 flex justify-between items-center border-b border-gray-50 bg-white shrink-0">
                                     <div className="flex flex-col">
                                         <h1 className="text-2xl sm:text-3xl font-black italic text-gray-800 tracking-tighter">St<span className="text-blue-600">o</span>ckify</h1>
-                                        <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold ml-1 uppercase tracking-widest">{APP_VERSION} • {isFirebaseConfigured ? <span className="text-blue-500">Cloud</span> : 'Local'}</p>
+                                        <p className="text-[9px] sm:text-[10px] text-gray-400 font-bold ml-1 uppercase tracking-widest">{APP_VERSION} • {isFirebaseConfigured ? 'Cloud' : 'Local'}</p>
                                     </div>
                                     <div className="flex space-x-2 sm:space-x-3">
                                         <button onClick={() => setIsMasked(!isMasked)} className="p-2 text-gray-300 active:scale-95"><Icon name="RotateCcw" className="w-6 h-6"/></button>
@@ -387,7 +400,7 @@
                                     <div className="grid grid-cols-3 px-2 py-5 border-y border-gray-100 bg-gray-50/40">
                                         <div className="text-center"><p className="text-gray-400 font-black text-[9px] uppercase tracking-tighter">今日損益</p><p className="font-black text-base mt-1"><Mask val={stats.dp} /></p></div>
                                         <div className="text-center border-x border-gray-200"><p className="text-gray-400 font-black text-[9px] uppercase tracking-tighter">持股市值</p><p className="font-black text-base mt-1 text-gray-800">{isMasked ? '****' : stats.mv.toLocaleString()}</p></div>
-                                        <div className="text-center"><p className="text-gray-400 font-black text-[9px] uppercase tracking-tighter text-red-500">累積配息</p><p className="font-black text-base mt-1 text-gray-800">{isMasked ? '****' : stats.td.toLocaleString()}</p></div>
+                                        <div className="text-center"><p className="text-gray-400 font-black text-[9px] uppercase text-red-500">累積配息</p><p className="font-black text-base mt-1 text-gray-800">{isMasked ? '****' : stats.td.toLocaleString()}</p></div>
                                     </div>
                                     <div className="flex px-5 py-3 text-[10px] text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10">
                                         <span className="w-[34%]">標的 / 股數</span>
@@ -411,7 +424,7 @@
                         {view === 'record' && (
                             <div className="flex flex-col h-full animate-in fade-in bg-white">
                                 <div className="p-4 flex justify-between items-center border-b border-gray-50 bg-white shrink-0">
-                                    <h1 className="text-2xl font-black italic text-gray-800">歷史交易</h1>
+                                    <h1 className="text-2xl font-black italic text-gray-800">交易流水帳</h1>
                                     <button onClick={() => setRecordSortOrder(recordSortOrder === 'desc' ? 'asc' : 'desc')} className="p-2 bg-gray-50 rounded-xl active:scale-95"><Icon name="ArrowUpDown" className="w-6 h-6"/></button>
                                 </div>
                                 <div className="flex-1 overflow-y-auto content-pb">
@@ -426,7 +439,7 @@
                                             <div key={date}>
                                                 <div className="bg-gray-50 px-5 py-2 flex justify-between items-center border-b border-gray-100 font-black text-gray-400 text-[10px]"><span>{date}</span><span>支出: {g.exp.toLocaleString()}</span></div>
                                                 {g.txs.map(tx => (
-                                                    <div key={tx.id} className="flex px-5 py-5 border-b border-gray-100 items-center">
+                                                    <div key={tx.id} className="flex px-5 py-5 border-b border-gray-100 items-center hover:bg-gray-50">
                                                         <span className="w-[35%] font-black text-sm sm:text-lg truncate pr-1">{tx.stockName}</span>
                                                         <span className="w-[20%] text-center font-bold text-gray-500 text-[10px] leading-tight truncate">{tx.type}<br/>{tx.shares.toLocaleString()}股</span>
                                                         <span className="w-[20%] text-right font-black text-sm truncate px-1">{tx.price.toLocaleString()}</span>
@@ -446,7 +459,7 @@
                         {/* 3. 股息統計 */}
                         {view === 'dividend' && (
                             <div className="flex flex-col h-full animate-in fade-in bg-white">
-                                <div className="p-4 flex justify-between items-center border-b border-gray-50 bg-white shrink-0"><h1 className="text-2xl font-black italic text-gray-800">股息統計</h1><Icon name="Coins" className="w-7 h-7 text-blue-500"/></div>
+                                <div className="p-4 flex justify-between items-center border-b border-gray-50 bg-white shrink-0"><h1 className="text-2xl font-black italic text-gray-800 tracking-tighter">股息統計</h1><Icon name="Coins" className="w-7 h-7 text-blue-500"/></div>
                                 <div className="flex-1 overflow-y-auto content-pb p-4 space-y-6">
                                     {(() => {
                                         const years = {};
@@ -479,25 +492,18 @@
                                     </div>
                                     <div className="space-y-3">
                                         <label className="flex items-center text-xs font-black uppercase text-gray-400 tracking-widest"><Icon name="Cloud" className="w-5 h-5 mr-2 text-blue-500"/> Firebase 雲端設定</label>
-                                        <textarea 
-                                            className="w-full h-32 bg-blue-50/30 p-4 rounded-2xl outline-none font-mono text-xs text-gray-600" 
-                                            value={fbConfigInput} 
-                                            onChange={e => setFbConfigInput(e.target.value)} 
-                                        />
+                                        <textarea className="w-full h-32 bg-blue-50/30 p-4 rounded-2xl outline-none font-mono text-xs text-gray-600" value={fbConfigInput} onChange={e => setFbConfigInput(e.target.value)} />
                                         <div className="flex space-x-2">
                                             <button onClick={handleSaveFbConfig} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-md">儲存設定</button>
                                             <button onClick={handleClearFbConfig} className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black">切回單機</button>
                                         </div>
                                     </div>
                                     <div className="h-px bg-gray-100"></div>
-                                    <div className="space-y-3">
-                                        <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black flex items-center justify-center space-x-2"><Icon name="Download" className="w-6 h-6"/><span>匯出備份 (.json)</span></button>
-                                        
-                                        <label className="w-full py-5 border-2 border-gray-200 text-gray-500 rounded-2xl font-black flex items-center justify-center space-x-2 cursor-pointer active:bg-gray-50">
-                                            <Icon name="Upload" className="w-6 h-6"/><span>匯入紀錄檔</span>
-                                            <input type="file" className="hidden" accept=".json" onChange={handleImport} />
-                                        </label>
-                                    </div>
+                                    <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-5 bg-gray-900 text-white rounded-2xl font-black flex items-center justify-center space-x-2"><Icon name="Download" className="w-6 h-6"/><span>匯出備份 (.json)</span></button>
+                                    <label className="w-full py-5 border-2 border-gray-200 text-gray-500 rounded-2xl font-black flex items-center justify-center space-x-2 cursor-pointer active:bg-gray-50">
+                                        <Icon name="Upload" className="w-6 h-6"/><span>匯入紀錄檔</span>
+                                        <input type="file" className="hidden" accept=".json" onChange={handleImport} />
+                                    </label>
                                     <div className="text-center bg-gray-50 p-4 rounded-2xl border border-gray-100">
                                         <p className="text-gray-400 font-black text-[10px] uppercase tracking-widest mb-1">Account Info</p>
                                         <p className="text-gray-600 font-mono text-[10px] break-all leading-tight">UID: {user?.uid || 'LocalStorage'}<br/>Mode: {isFirebaseConfigured ? 'CLOUD' : 'LOCAL'}</p>
@@ -506,17 +512,17 @@
                             </div>
                         )}
 
-                        {/* 5. 新增紀錄 (固定按鈕與 iPhone 優化) */}
+                        {/* 5. 新增紀錄 (⚠️ 樂觀更新優化) */}
                         {view === 'add' && (
                             <div className="flex flex-col h-full w-full bg-white z-[100] animate-in slide-in-from-bottom-4">
                                 <div className="p-4 flex items-center border-b border-gray-50 bg-white shrink-0">
-                                    <button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" className="w-10 h-10"/></button>
+                                    <button onClick={() => setView('holding')} className="p-1 active:scale-90"><Icon name="ChevronLeft" className="w-10 h-10"/></button>
                                     <h2 className="flex-1 text-center font-black text-xl uppercase tracking-tighter">新增紀錄</h2>
                                     <div className="w-10"></div>
                                 </div>
-                                <div className="flex-1 overflow-y-auto p-6 sm:p-10 bg-white">
-                                    <div className="max-w-md mx-auto space-y-8">
-                                        {toastMsg && <div className="p-4 bg-green-50 text-green-700 rounded-2xl flex items-center justify-center font-bold text-sm shadow-sm"><Icon name="CheckCircle2" className="w-6 h-6 mr-2" /> {toastMsg}</div>}
+                                <div className="flex-1 overflow-y-auto p-6 bg-white">
+                                    <div className="max-w-md mx-auto space-y-8 pb-32">
+                                        {toastMsg && <div className="p-4 bg-green-50 text-green-700 rounded-2xl flex items-center justify-center font-bold text-sm shadow-sm animate-in zoom-in-95"><Icon name="CheckCircle2" className="w-6 h-6 mr-2" /> {toastMsg}</div>}
                                         <div className="space-y-3">
                                             <div className="flex items-center space-x-3"><label className="text-gray-400 font-black text-xs uppercase w-16 shrink-0">代號</label><input className="flex-1 bg-gray-50 p-5 rounded-2xl outline-none font-black text-2xl uppercase" placeholder="2330" value={formCode} onChange={e=>setFormCode(e.target.value)} /></div>
                                             <div className="pl-[76px] font-black text-blue-600 text-lg min-h-[28px]">{isSearchingName ? "Searching..." : (stockMaster[formCode.toUpperCase()]?.n || "輸入代號確認")}</div>
@@ -527,7 +533,6 @@
                                             {activeTab === '配息' ? (
                                                 <React.Fragment>
                                                     <div className="flex items-center border-b border-gray-100 pb-4"><label className="text-gray-400 font-black text-xs uppercase w-16 shrink-0">金額</label><input type="number" value={formTotalAmount} onChange={e=>setFormTotalAmount(e.target.value)} className="flex-1 ml-3 outline-none font-black text-2xl text-blue-600 bg-transparent" placeholder="0" /></div>
-                                                    <div className="text-center text-gray-200 font-bold text-[9px] uppercase py-2">或用明細計算</div>
                                                     <div className="flex items-center border-b border-gray-100 pb-4"><label className="text-gray-400 font-black text-xs uppercase w-16 shrink-0">每股息</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-3 outline-none font-black text-2xl bg-transparent" placeholder="0.00" /></div>
                                                     <div className="flex items-center border-b border-gray-100 pb-4"><label className="text-gray-400 font-black text-xs uppercase w-16 shrink-0">股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-3 outline-none font-black text-2xl bg-transparent" placeholder="0" /></div>
                                                     <div className="flex items-center border-b border-gray-100 pb-4"><label className="text-gray-400 font-black text-xs uppercase w-16 shrink-0">匯費</label><input type="number" value={formFee} onChange={e=>setFormFee(e.target.value)} className="flex-1 ml-3 outline-none font-black text-2xl bg-transparent text-gray-400" placeholder="10" /></div>
@@ -549,18 +554,43 @@
                                 </div>
                             </div>
                         )}
-                        {/* 個股詳情 (同前版本，省略細節) */}
+
+                        {/* 6. 個股詳情 */}
                         {view === 'detail' && selectedStockId && (
                            <div className="flex flex-col h-full animate-in slide-in-from-right bg-white overflow-hidden">
-                               <div className="p-4 flex items-center border-b border-gray-50 bg-white shrink-0"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={10}/></button><h2 className="flex-1 text-center font-black text-xl uppercase tracking-tighter">{selectedStockId} {stockMaster[selectedStockId]?.n}</h2><button onClick={()=>{setFormCode(selectedStockId); setView('add');}} className="text-blue-500 p-1"><Icon name="Plus" size={32}/></button></div>
+                               <div className="p-4 flex items-center border-b border-gray-50 bg-white shrink-0"><button onClick={() => setView('holding')} className="p-1 active:scale-90"><Icon name="ChevronLeft" className="w-10 h-10"/></button><h2 className="flex-1 text-center font-black text-xl uppercase tracking-tighter">{selectedStockId} {stockMaster[selectedStockId]?.n}</h2><button onClick={()=>{setFormCode(selectedStockId); setView('add');}} className="text-blue-500 p-1 active:scale-90"><Icon name="Plus" className="w-8 h-8"/></button></div>
                                <div className="flex-1 overflow-y-auto content-pb">
-                                    {/* 內容渲染... */}
+                                   {(() => {
+                                       const d = stats.inv[selectedStockId]; if (!d) return null;
+                                       const m = marketData[selectedStockId] || { p: 0, c: 0 };
+                                       const profit = showWithDividend ? (d.sh * m.p - d.cost + d.div) : (d.sh * m.p - d.cost);
+                                       const avg = d.sh > 0 ? (showWithDividend ? (d.cost - d.div)/d.sh : d.cost/d.sh) : 0;
+                                       return (
+                                           <div className="flex flex-col">
+                                               <div className={`p-6 flex justify-between items-center ${m.c >= 0 ? 'bg-red-50' : 'bg-green-50'}`}><div className={`text-2xl font-black ${m.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{m.p} <span className="text-sm font-bold ml-1">{m.c >= 0 ? '▲' : '▼'} {Math.abs(m.c)}</span></div><button onClick={()=>setShowWithDividend(!showWithDividend)} className="px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-black shadow-sm flex items-center space-x-1 transition-all active:scale-95">{showWithDividend ? <Icon name="ToggleRight" size={18} className="text-blue-500"/> : <Icon name="ToggleLeft" size={18} className="text-gray-300"/>} <span>{showWithDividend ? '含息' : '除息'}</span></button></div>
+                                               <div className="p-8 border-b border-gray-50"><p className="text-gray-400 text-xs font-black uppercase mb-1">{showWithDividend ? '累積損益 (含息)' : '持股損益'}</p><h3 className="text-4xl font-black tabular-nums tracking-tighter"><Mask val={profit} /></h3>
+                                                   <div className="grid grid-cols-3 gap-y-8 mt-10 text-center text-[12px]">
+                                                       <div className="text-left"><p className="text-gray-400 font-black uppercase tracking-tighter">平均成本</p><p className="font-black text-xl text-gray-800">{isMasked ? '***' : avg.toFixed(2)}</p></div>
+                                                       <div><p className="text-gray-400 font-black uppercase text-blue-600 tracking-tighter">已實現</p><p className="font-black text-xl"><Mask val={d.realized} /></p></div>
+                                                       <div className="text-right"><p className="text-gray-400 font-black uppercase tracking-tighter">目前持股</p><p className="font-black text-xl text-gray-800">{d.sh.toLocaleString()}</p></div>
+                                                       <div className="text-left"><p className="text-gray-400 font-black uppercase tracking-tighter">持股市值</p><p className="font-black text-xl text-gray-800">{(d.sh * m.p).toLocaleString(undefined, {maximumFractionDigits:0})}</p></div>
+                                                       <div><p className="text-gray-400 font-black uppercase tracking-tighter">今日盈虧</p><p className="font-black text-xl"><Mask val={d.sh * m.c} /></p></div>
+                                                       <div className="text-right"><p className="text-gray-400 font-black uppercase tracking-tighter text-red-500">累計領息</p><p className="font-black text-xl text-gray-800">{d.div.toLocaleString()}</p></div>
+                                                   </div>
+                                               </div>
+                                               <div className="bg-gray-50/40 pb-32">
+                                                   <div className="grid grid-cols-4 px-6 py-3 text-[10px] text-gray-400 font-black border-b border-gray-100"><span>日期</span><span className="text-center">交易</span><span className="text-right">單價</span><span className="text-right">收支</span></div>
+                                                   {d.history.sort((a,b)=>b.timestamp-a.timestamp).map(tx => (<div key={tx.id} className="grid grid-cols-4 px-6 py-6 border-b border-gray-50 items-center hover:bg-white transition-colors text-sm"><span className="font-black text-gray-400">{tx.date.substring(5)}</span><span className="text-center font-black text-gray-800">{tx.type} {tx.shares > 0 ? `${tx.shares}股` : ''}</span><span className="text-right font-black">{tx.price > 0 ? tx.price : '-'}</span><div className="text-right flex items-center justify-end space-x-3"><Mask val={tx.total} /><button onClick={()=>setPendingDeleteId(tx.id)} className="text-gray-300 hover:text-red-400 p-1"><Icon name="Trash" size={20}/></button></div></div>))}
+                                               </div>
+                                           </div>
+                                       );
+                                   })()}
                                </div>
                            </div>
                         )}
                     </div>
 
-                    {/* === 主導覽列 === */}
+                    {/* 底部導覽列 */}
                     {(view === 'holding' || view === 'record' || view === 'dividend') && (
                         <React.Fragment>
                             <div className="absolute left-4 right-4 h-16 sm:h-20 bg-white/90 backdrop-blur-2xl border border-white/50 rounded-2xl sm:rounded-[32px] flex items-center justify-between px-2 sm:px-6 z-50 shadow-[0_20px_50px_rgba(0,0,0,0.1)] nav-island">
@@ -573,24 +603,14 @@
                                     <button onClick={syncMarketData} className={`flex flex-col items-center ${isUpdating?'animate-spin text-blue-400':'text-gray-300'} active:scale-95`}><Icon name="Refresh" className="w-7 h-7"/><span className="text-[10px] font-black mt-1 uppercase">同步</span></button>
                                 </div>
                             </div>
-                            <button onClick={() => { setFormCode(''); setView('add'); }} className="absolute left-1/2 -translate-x-1/2 w-16 sm:w-20 h-16 sm:h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white z-[60] shadow-xl border-[6px] border-white active:scale-90 transition-all fab-btn">
-                                <Icon name="Plus" className="w-8 h-8 sm:w-10 sm:h-10"/>
-                            </button>
+                            <button onClick={() => { setFormCode(''); setView('add'); }} className="absolute left-1/2 -translate-x-1/2 w-16 sm:w-20 h-16 sm:h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white z-[60] shadow-xl border-[6px] border-white active:scale-90 transition-all fab-btn"><Icon name="Plus" className="w-8 h-8 sm:w-10 sm:h-10"/></button>
                         </React.Fragment>
                     )}
 
-                    {/* 刪除確認彈窗 */}
+                    {/* 刪除確認 */}
                     {pendingDeleteId && (
                         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-6">
-                            <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
-                                <div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500"><Icon name="AlertCircle" className="w-8 h-8" /></div>
-                                <h3 className="text-xl font-black text-center mb-2">確定刪除？</h3>
-                                <p className="text-gray-500 text-center mb-6 font-bold text-sm">此動作將從雲端移除。</p>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <button onClick={()=>setPendingDeleteId(null)} className="py-4 bg-gray-100 rounded-2xl font-black text-gray-500 active:scale-95">取消</button>
-                                    <button onClick={confirmDelete} className="py-4 bg-red-500 rounded-2xl font-black text-white shadow-md active:scale-95">確認</button>
-                                </div>
-                            </div>
+                            <div className="bg-white w-full max-w-xs rounded-3xl p-6 shadow-2xl animate-in zoom-in-95"><div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-red-500"><Icon name="AlertCircle" className="w-8 h-8" /></div><h3 className="text-xl font-black text-center mb-2">確定刪除？</h3><div className="grid grid-cols-2 gap-4 mt-6"><button onClick={()=>setPendingDeleteId(null)} className="py-4 bg-gray-100 rounded-2xl font-black text-gray-500 active:scale-95">取消</button><button onClick={confirmDelete} className="py-4 bg-red-500 rounded-2xl font-black text-white shadow-md active:scale-95">確認</button></div></div>
                         </div>
                     )}
                 </div>
