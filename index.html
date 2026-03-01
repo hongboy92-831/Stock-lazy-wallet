@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Stockify 雲端專業版 v4.2.4</title>
+    <title>Stockify 雲端專業版 v4.2.5</title>
     
     <!-- 1. 引入必要的函式庫 (CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -35,24 +35,32 @@
         const { useState, useEffect, useMemo, useRef } = React;
 
         // --- Firebase 設定 ---
-        // 重要提示：如果您看到空白，請檢查此處的 apiKey 是否已正確填寫
+        // ⚠️ 重要提示：請將您在 Firebase Console 申請到的金鑰填入下方對應的引號中
         const firebaseConfig = window.__firebase_config ? JSON.parse(window.__firebase_config) : {
-            apiKey: "", // 請從 Firebase Console 複製貼上您的 API Key
-            authDomain: "",
-            projectId: "",
+            apiKey: "", // ← 請填寫您的 apiKey
+            authDomain: "", // ← 請填寫您的 authDomain
+            projectId: "", // ← 請填寫您的 projectId
             storageBucket: "",
             messagingSenderId: "",
             appId: ""
         };
 
-        // 檢查 Firebase 是否已設定
-        const isFirebaseConfigured = firebaseConfig.apiKey !== "";
+        // 安全防護：檢查是否有填寫 API Key
+        const isFirebaseConfigured = firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "";
+        
+        let auth = null;
+        let db = null;
 
-        if (isFirebaseConfigured && !firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
+        // 只有在已填寫設定的情況下，才啟動 Firebase，避免白畫面崩潰
+        if (isFirebaseConfigured) {
+            if (!firebase.apps.length) {
+                firebase.initializeApp(firebaseConfig);
+            }
+            auth = firebase.auth();
+            db = firebase.firestore();
         }
 
-        const APP_VERSION = 'v4.2.4 (Cloud Ready)';
+        const APP_VERSION = 'v4.2.5 (Cloud Safe)';
         const TOKEN_KEY = 'stockify_token';
         const MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0wMSAwMjowOTo0OCIsInVzZXJfaWQiOiJob25nYm95IiwiZW1haWwiOiJob25nYm95OTJAZ21haWwuY29tIiwiaXAiOiI2MS4yMjAuOTMuNzQifQ.Mk4GPZsGRLM79QvxVHIcRXE5y_FThk9uMCsoJfmQCYc";
 
@@ -113,13 +121,13 @@
 
             // --- 1. Firebase 驗證 ---
             useEffect(() => {
-                if (!isFirebaseConfigured) {
+                if (!isFirebaseConfigured || !auth) {
                     setIsCloudLoading(false);
                     return;
                 }
-                const unsubscribe = firebase.auth().onAuthStateChanged(async (currUser) => {
+                const unsubscribe = auth.onAuthStateChanged(async (currUser) => {
                     if (!currUser) {
-                        try { await firebase.auth().signInAnonymously(); } catch (e) { console.error(e); }
+                        try { await auth.signInAnonymously(); } catch (e) { console.error(e); }
                     } else {
                         setUser(currUser);
                         setIsCloudLoading(false);
@@ -130,14 +138,13 @@
 
             // --- 2. 雲端同步監聽 ---
             useEffect(() => {
-                if (!user || !isFirebaseConfigured) return;
-                const db = firebase.firestore();
-                const appId = window.__app_id || 'stockify-v4';
-                const txRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('transactions');
+                if (!user || !isFirebaseConfigured || !db) return;
+                const appIdStr = window.__app_id || 'stockify-v4';
+                const txRef = db.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('transactions');
                 const unsub = txRef.onSnapshot(snap => {
                     setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
                 });
-                const masterRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('settings').doc('master');
+                const masterRef = db.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('settings').doc('master');
                 const unsubM = masterRef.onSnapshot(doc => {
                     if (doc.exists) setStockMaster(doc.data());
                 });
@@ -171,7 +178,7 @@
             };
 
             const fetchStockInfo = async (code) => {
-                if (!apiToken || !user || !isFirebaseConfigured) return;
+                if (!apiToken || !user || !isFirebaseConfigured || !db) return;
                 setIsSearchingName(true);
                 try {
                     const resp = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${code}&token=${apiToken}`);
@@ -180,9 +187,8 @@
                         const info = json.data[0];
                         const newM = { ...stockMaster, [code]: { n: info.stock_name, t: code.endsWith('B') ? 'BondETF' : (code.startsWith('00') ? 'StockETF' : 'Stock') } };
                         setStockMaster(newM);
-                        const db = firebase.firestore();
-                        const appId = window.__app_id || 'stockify-v4';
-                        await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('settings').doc('master').set(newM);
+                        const appIdStr = window.__app_id || 'stockify-v4';
+                        await db.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('settings').doc('master').set(newM);
                     }
                 } catch (e) { console.error(e); } finally { setIsSearchingName(false); }
             };
@@ -233,11 +239,10 @@
 
             // --- 4. UI 操作 ---
             const saveTx = async (stay) => {
-                if (!formCode || !user || !isFirebaseConfigured || (activeTab !== '配息' && (!formPrice || !formShares))) return;
+                if (!formCode || !user || !isFirebaseConfigured || !db || (activeTab !== '配息' && (!formPrice || !formShares))) return;
                 const code = formCode.toUpperCase();
-                const db = firebase.firestore();
-                const appId = window.__app_id || 'stockify-v4';
-                await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('transactions').add({
+                const appIdStr = window.__app_id || 'stockify-v4';
+                await db.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('transactions').add({
                     stockId: code, stockName: stockMaster[code]?.n || `標的 ${code}`,
                     type: activeTab, price: parseFloat(formPrice)||0, shares: parseInt(formShares)||0,
                     total: calc.total, date: formDate.replace(/-/g, '/'), timestamp: Date.now()
@@ -253,15 +258,20 @@
             // --- 渲染：Firebase 未設定畫面 ---
             if (!isFirebaseConfigured) {
                 return (
-                    <div className="h-screen flex flex-col items-center justify-center p-8 bg-white text-center">
-                        <div className="bg-red-50 p-6 rounded-full mb-6">
-                            <Icon name="AlertCircle" size={48} className="text-red-500" />
-                        </div>
-                        <h1 className="text-2xl font-black text-gray-800 mb-4">尚未設定 Firebase</h1>
-                        <p className="text-gray-500 mb-8 leading-relaxed">此版本需要連線至您的雲端資料庫。請在程式碼中的 <code>firebaseConfig</code> 填入您的 API 金鑰後重新上傳。</p>
-                        <div className="bg-gray-50 p-4 rounded-xl text-left font-mono text-xs w-full overflow-x-auto">
-                            apiKey: "您的金鑰..."<br/>
-                            projectId: "您的專案ID..."
+                    <div className="app-container bg-white">
+                        <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+                            <div className="bg-red-50 p-6 rounded-full mb-6">
+                                <Icon name="AlertCircle" size={48} className="text-red-500" />
+                            </div>
+                            <h1 className="text-2xl font-black text-gray-800 mb-4 tracking-tighter">系統初始化失敗</h1>
+                            <p className="text-gray-500 mb-8 leading-relaxed font-bold">目前系統無法連線至雲端資料庫。<br/>請在程式碼的 <code>firebaseConfig</code> 區塊中填入您的 API 金鑰。</p>
+                            <div className="bg-gray-50 border border-gray-200 p-5 rounded-2xl text-left font-mono text-xs w-full overflow-x-auto text-gray-600 shadow-inner">
+                                <span className="text-blue-500">const</span> firebaseConfig = {'{'}<br/>
+                                &nbsp;&nbsp;apiKey: <span className="text-red-500">"請填入這裡"</span>,<br/>
+                                &nbsp;&nbsp;authDomain: <span className="text-red-500">"..."</span>,<br/>
+                                &nbsp;&nbsp;projectId: <span className="text-red-500">"..."</span><br/>
+                                {'}'};
+                            </div>
                         </div>
                     </div>
                 );
@@ -306,7 +316,7 @@
                                 <div className="flex-1 overflow-y-auto pb-40">
                                     <div className="grid grid-cols-4 px-6 py-3 text-[10px] text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10"><span>標的 / 股數</span><span className="text-right">現價</span><span className="text-right">成本</span><span className="text-right">損益</span></div>
                                     {Object.entries(stats.inv).map(([id, d]) => d.sh > 0 && (
-                                        <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="grid grid-cols-4 px-6 py-6 border-b border-gray-50 items-center active:bg-gray-50">
+                                        <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="grid grid-cols-4 px-6 py-5 border-b border-gray-50 items-center active:bg-gray-50">
                                             <div><p className="font-black text-lg leading-tight">{d.n}</p><p className="text-xs text-gray-400">{id} / {d.sh.toLocaleString()}股</p></div>
                                             <div className="text-right"><p className="font-black text-lg">{marketData[id]?.p || "---"}</p><p className={`text-[10px] font-bold ${marketData[id]?.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{marketData[id]?.c >= 0 ? '▲' : '▼'} {Math.abs(marketData[id]?.c || 0)}</p></div>
                                             <div className="text-right font-bold text-gray-600">{isMasked ? '***' : ((d.cost - (showWithDividend?d.div:0))/d.sh).toFixed(2)}</div>
@@ -378,7 +388,7 @@
                         {/* 4. 設定頁面 */}
                         {view === 'settings' && (
                             <div className="absolute inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-right duration-300">
-                                <div className="p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tighter uppercase text-gray-800">Settings</h2></div>
+                                <div className="p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tighter uppercase text-gray-800">雲端設定</h2></div>
                                 <div className="p-10 space-y-10 flex-1 overflow-y-auto">
                                     <div className="space-y-4"><label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Key" size={20} className="mr-2"/> FinMind API Token</label><input type="password" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-lg border-2 border-transparent focus:border-blue-200 transition-all" value={apiToken} onChange={e => saveToken(e.target.value)} /></div>
                                     <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-8 bg-gray-900 text-white rounded-[32px] font-black text-xl flex items-center justify-center space-x-4 active:scale-95 shadow-xl transition-all"><Icon name="Download" size={32}/><span>匯出紀錄 (.json)</span></button>
@@ -435,7 +445,7 @@
 
                     {/* 新增紀錄彈窗 */}
                     <div className={`absolute inset-0 bg-white z-[100] flex flex-col transition-all duration-300 transform ${view === 'add' ? 'translate-y-0' : 'translate-y-full pointer-events-none'}`}>
-                        <div className="p-5 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')}><Icon name="ChevronLeft" size={40}/></button><h2 className="flex-1 text-center font-black text-2xl uppercase tracking-tighter">新增交易紀錄</h2><div className="w-10"></div></div>
+                        <div className="p-5 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')}><Icon name="ChevronLeft" size={40}/></button><h2 className="flex-1 text-center font-black text-2xl uppercase tracking-tighter">新增紀錄</h2><div className="w-10"></div></div>
                         <div className="p-10 space-y-12 flex-1 overflow-y-auto pb-48 bg-white">
                             <div className="space-y-4">
                                 <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase w-20">股票代號</label><input className="flex-1 bg-gray-50 p-6 rounded-[24px] outline-none font-black text-2xl uppercase" placeholder="如 2330" value={formCode} onChange={e=>setFormCode(e.target.value)} /></div>
@@ -447,7 +457,7 @@
                                 {activeTab === '配息' ? (
                                     <React.Fragment>
                                         <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20 leading-none">配發金額</label><input type="number" value={formTotalAmount} onChange={e=>setFormTotalAmount(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl text-blue-600" placeholder="0" /></div>
-                                        <div className="text-center text-gray-200 font-bold text-xs uppercase tracking-[5px]">或是使用計算</div>
+                                        <div className="text-center text-gray-200 font-bold text-xs uppercase tracking-[5px]">或是計算</div>
                                         <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">每股股息</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0.00" /></div>
                                         <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">除息股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0" /></div>
                                     </React.Fragment>
@@ -474,8 +484,8 @@
                                     <button onClick={()=>setPendingDeleteId(null)} className="py-4 bg-gray-100 rounded-2xl font-black text-gray-500 active:scale-95 transition-transform">取消</button>
                                     <button onClick={async () => {
                                         const db = firebase.firestore();
-                                        const appId = window.__app_id || 'stockify-v4';
-                                        await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('transactions').doc(pendingDeleteId).delete();
+                                        const appIdStr = window.__app_id || 'stockify-v4';
+                                        await db.collection('artifacts').doc(appIdStr).collection('users').doc(user.uid).collection('transactions').doc(pendingDeleteId).delete();
                                         setPendingDeleteId(null);
                                     }} className="py-4 bg-red-500 rounded-2xl font-black text-white shadow-lg active:scale-95 transition-transform">確認刪除</button>
                                 </div>
