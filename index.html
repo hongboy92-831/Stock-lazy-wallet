@@ -1,717 +1,507 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>退休懶錢包 v1.5.2</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap');
-        
-        body { 
-            font-family: 'Noto+Sans+TC', sans-serif; 
-            background-color: #0b1120; 
-            color: #f8fafc; 
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, query } from 'firebase/firestore';
+import { 
+  ChevronLeft, Info, Plus, History, PieChart, 
+  X, RotateCcw, Search as SearchIcon, Trash2,
+  Download, Upload, Settings, RefreshCw, Save, ChevronRight, Calendar, Key, CheckCircle2, Loader2, AlertCircle, Coins, ArrowUpDown, ToggleLeft, ToggleRight, Cloud
+} from 'lucide-react';
+
+/**
+ * 版本號：v4.2.0 Cloud Aesthetic Update
+ * 核心改進：
+ * 1. 重新設計底部導覽列：中央懸浮 FAB (+) 與標籤分開，外觀更現代整齊。
+ * 2. 佈局平衡：左側(持股, 紀錄) | 中央(+) | 右側(股息, 重新整理)。
+ * 3. 維持所有 v4.1.0 損益與含息成本計算邏輯。
+ * 4. 嚴格執行 14px 字級與常駐 DOM 彈窗技術。
+ */
+
+// Firebase 配置 (由環境提供)
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'stockify-v4';
+
+const APP_VERSION = 'v4.2.0 (Cloud)';
+const TOKEN_KEY = 'stockify_token';
+const MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0wMSAwMjowOTo0OCIsInVzZXJfaWQiOiJob25nYm95IiwiZW1haWwiOiJob25nYm95OTJAZ21haWwuY29tIiwiaXAiOiI2MS4yMjAuOTMuNzQifQ.Mk4GPZsGRLM79QvxVHIcRXE5y_FThk9uMCsoJfmQCYc";
+
+export default function App() {
+  // --- 雲端與帳號狀態 ---
+  const [user, setUser] = useState(null);
+  const [isCloudLoading, setIsCloudLoading] = useState(true);
+
+  // --- 基礎狀態 ---
+  const [view, setView] = useState('holding'); 
+  const [transactions, setTransactions] = useState([]);
+  const [stockMaster, setStockMaster] = useState({}); 
+  const [marketData, setMarketData] = useState({}); 
+  const [apiToken, setApiToken] = useState(MY_TOKEN);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isMasked, setIsMasked] = useState(false);
+  const [showWithDividend, setShowWithDividend] = useState(true); 
+  const [selectedStockId, setSelectedStockId] = useState(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [recordSortOrder, setRecordSortOrder] = useState('desc'); 
+
+  // --- 表單狀態 ---
+  const [formCode, setFormCode] = useState('');
+  const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
+  const [activeTab, setActiveTab] = useState('買進');
+  const [formTotalAmount, setFormTotalAmount] = useState(''); 
+  const [formPrice, setFormPrice] = useState('');     
+  const [formShares, setFormShares] = useState('');   
+  const [formFee, setFormFee] = useState('');         
+  const [formNotes, setFormNotes] = useState('');
+  const [isSearchingName, setIsSearchingName] = useState(false);
+
+  // --- 1. Firebase 驗證監聽 ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
         }
-        
-        .number-font { font-family: 'Space Grotesk', monospace; }
-        
-        .stock-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        .stock-card:active { transform: scale(0.97); }
-        
-        .up-color { color: #ef4444; } /* 台灣紅漲 */
-        .down-color { color: #22c55e; } /* 台灣綠跌 */
-        
-        @keyframes pulse-glow {
-            0%, 100% { text-shadow: 0 0 10px rgba(239, 68, 68, 0); }
-            50% { text-shadow: 0 0 20px rgba(239, 68, 68, 0.4); }
+      } catch (e) { console.error("Auth failed", e); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (currUser) => {
+      setUser(currUser);
+      setIsCloudLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- 2. Firestore 資料同步 ---
+  useEffect(() => {
+    if (!user) return;
+    const txCollection = collection(db, 'artifacts', appId, 'users', user.uid, 'transactions');
+    const unsubscribe = onSnapshot(txCollection, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTransactions(data);
+    });
+    const masterDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'master');
+    const unsubMaster = onSnapshot(masterDoc, (docSnap) => {
+      if (docSnap.exists()) setStockMaster(docSnap.data());
+    });
+    return () => { unsubscribe(); unsubMaster(); };
+  }, [user]);
+
+  // --- 3. 業務邏輯與 API (FinMind) ---
+  useEffect(() => {
+    const code = formCode.toUpperCase();
+    if (code.length < 2 || stockMaster[code]) return;
+    const timer = setTimeout(() => fetchStockInfo(code), 600);
+    return () => clearTimeout(timer);
+  }, [formCode, stockMaster]);
+
+  useEffect(() => {
+    if (view === 'holding' && transactions.length > 0 && apiToken) syncMarketData();
+  }, [view, apiToken]);
+
+  const fetchStockInfo = async (code) => {
+    if (!apiToken || !user) return;
+    setIsSearchingName(true);
+    try {
+      const resp = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${code}&token=${apiToken}`);
+      const json = await resp.json();
+      if (json.data && json.data.length > 0) {
+        const info = json.data[0];
+        const updatedMaster = { ...stockMaster, [code]: { n: info.stock_name, t: code.endsWith('B') ? 'BondETF' : (code.startsWith('00') ? 'StockETF' : 'Stock') } };
+        setStockMaster(updatedMaster);
+        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'master'), updatedMaster);
+      }
+    } catch (e) { console.error(e); }
+    finally { setIsSearchingName(false); }
+  };
+
+  const syncMarketData = async () => {
+    if (isUpdating || !apiToken) return;
+    const codes = Array.from(new Set(transactions.map(t => t.stockId)));
+    if (codes.length === 0) return;
+    setIsUpdating(true);
+    const dateLimit = new Date();
+    dateLimit.setDate(dateLimit.getDate() - 7);
+    const dateStr = dateLimit.toISOString().split('T')[0];
+    try {
+      const newMarket = { ...marketData };
+      for (const code of codes) {
+        const resp = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${code}&start_date=${dateStr}&token=${apiToken}`);
+        const json = await resp.json();
+        if (json.data && json.data.length > 0) {
+          const latest = json.data[json.data.length - 1];
+          const prev = json.data.length > 1 ? json.data[json.data.length - 2] : latest;
+          newMarket[code] = { p: latest.close, c: parseFloat((latest.close - prev.close).toFixed(2)) };
         }
-        
-        .live-update { animation: pulse-glow 2s infinite; }
-        
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        
-        /* 輕量推播動畫 */
-        @keyframes slide-down {
-            0% { transform: translateY(-150%); opacity: 0; }
-            10% { transform: translateY(0); opacity: 1; }
-            90% { transform: translateY(0); opacity: 1; }
-            100% { transform: translateY(-150%); opacity: 0; }
+      }
+      setMarketData(newMarket);
+    } catch (e) { console.error(e); }
+    finally { setIsUpdating(false); }
+  };
+
+  // --- 4. 計算邏輯 ---
+  const stats = useMemo(() => {
+    const inv = {};
+    const sorted = [...transactions].sort((a,b)=> a.timestamp - b.timestamp);
+    sorted.forEach(tx => {
+      const id = tx.stockId;
+      if (!inv[id]) inv[id] = { sh: 0, cost: 0, realized: 0, div: 0, n: tx.stockName, history: [] };
+      inv[id].history.push(tx);
+      if (tx.type === '買進') {
+        inv[id].sh += tx.shares;
+        inv[id].cost += Math.abs(tx.total);
+      } else if (tx.type === '賣出') {
+        if (inv[id].sh > 0) {
+          const avgCost = inv[id].cost / inv[id].sh;
+          const costOfSold = tx.shares * avgCost;
+          inv[id].realized += (tx.total - costOfSold);
+          inv[id].sh -= tx.shares;
+          inv[id].cost -= costOfSold;
         }
+      } else if (tx.type === '配息') {
+        inv[id].div += Math.abs(tx.total);
+      }
+    });
+
+    let totalMV = 0, totalRemCost = 0, totalDailyP = 0, totalD = 0;
+    Object.entries(inv).forEach(([id, data]) => {
+      const m = marketData[id] || { p: 0, c: 0 };
+      totalMV += Math.max(0, data.sh) * m.p;
+      totalRemCost += Math.max(0, data.cost);
+      totalDailyP += Math.max(0, data.sh) * m.c;
+      totalD += data.div;
+    });
+
+    const unrealized = totalMV - totalRemCost;
+    const currentProfit = showWithDividend ? unrealized + totalD : unrealized;
+    const profitPct = totalRemCost > 0 ? (currentProfit / totalRemCost) * 100 : 0;
+    return { unrealized, currentProfit, profitPct, totalMV, totalRemCost, totalDailyP, totalD, inv };
+  }, [transactions, marketData, showWithDividend]);
+
+  const calc = useMemo(() => {
+    if (activeTab === '配息') {
+      if (formTotalAmount) return { total: parseFloat(formTotalAmount), fee: 0 };
+      const p = parseFloat(formPrice) || 0, s = parseInt(formShares) || 0, f = parseFloat(formFee) || 0;
+      return { total: (p * s) - f, fee: f };
+    }
+    const p = parseFloat(formPrice) || 0, s = parseInt(formShares) || 0, amount = p * s;
+    if (amount === 0) return { total: 0, fee: 0, tax: 0, taxRate: 0.003 };
+    let fee = Math.floor(amount * 0.001425 * 0.6); if (fee < 20) fee = 20;
+    const code = formCode.toUpperCase();
+    let taxRate = 0.003; if (code.endsWith('B')) taxRate = 0; else if (code.startsWith('00')) taxRate = 0.001;
+    const tax = activeTab === '賣出' ? Math.floor(amount * taxRate) : 0;
+    return { total: activeTab === '買進' ? -(amount + fee) : (amount - fee - tax), fee, tax, taxRate };
+  }, [formPrice, formShares, formFee, formTotalAmount, activeTab, formCode]);
+
+  // --- 5. 操作處理 ---
+  const handleSaveToCloud = async (stay) => {
+    if (!user || !formCode || (activeTab !== '配息' && (!formPrice || !formShares))) return;
+    const code = formCode.toUpperCase();
+    const newTx = {
+      stockId: code,
+      stockName: stockMaster[code]?.n || `標的 ${code}`,
+      type: activeTab,
+      price: parseFloat(formPrice) || 0,
+      shares: parseInt(formShares) || 0,
+      total: calc.total,
+      notes: formNotes,
+      date: formDate.replace(/-/g, '/'),
+      timestamp: Date.now()
+    };
+    try {
+      const txCollection = collection(db, 'artifacts', appId, 'users', user.uid, 'transactions');
+      await addDoc(txCollection, newTx);
+      setFormPrice(''); setFormShares(''); setFormFee(''); setFormNotes(''); setFormTotalAmount('');
+      if (!stay) { setFormCode(''); setView('holding'); }
+    } catch (e) { console.error("Cloud Save Failed", e); }
+  };
+
+  const handleCloudDelete = async () => {
+    if (!user || !pendingDeleteId) return;
+    try {
+      const txDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', pendingDeleteId);
+      await deleteDoc(txDoc);
+      setPendingDeleteId(null);
+      const remainingForThisStock = transactions.filter(t => t.stockId === selectedStockId && t.id !== pendingDeleteId);
+      if (view === 'detail' && remainingForThisStock.length === 0) setView('holding');
+    } catch (e) { console.error("Cloud Delete Failed", e); }
+  };
+
+  // --- 6. 介面渲染 ---
+  const Mask = ({ val }) => {
+    if (isMasked) return "****";
+    const num = parseFloat(val) || 0;
+    const color = num >= 0 ? 'text-red-500' : 'text-green-600';
+    return <span className={color}>{num.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>;
+  };
+
+  if (isCloudLoading) return <div className="h-screen w-full flex flex-col items-center justify-center bg-white"><Loader2 className="animate-spin text-blue-500 mb-4" size={48}/><p className="font-black text-blue-500 italic text-xl">STOCKIFY CLOUD</p></div>;
+
+  return (
+    <div className="w-full max-w-screen-sm mx-auto h-screen bg-gray-50 flex flex-col relative overflow-hidden select-none shadow-2xl text-[14px] font-sans">
+      
+      <div className="flex-1 overflow-hidden relative bg-white">
         
-        .toast-notification { animation: slide-down 6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-    </style>
-</head>
-<body class="pb-24">
-
-    <!-- 系統通知推播 -->
-    <div id="toast-container" class="fixed top-4 left-0 right-0 z-50 flex justify-center hidden pointer-events-none">
-        <div class="bg-indigo-600/95 backdrop-blur-md border border-indigo-400/50 text-white px-5 py-3 rounded-2xl shadow-2xl shadow-indigo-900/50 flex items-center gap-3 max-w-sm w-[90%] pointer-events-auto">
-            <i data-lucide="bell-ring" class="w-5 h-5 text-yellow-300"></i>
-            <div class="flex-1">
-                <p class="text-xs font-bold text-indigo-100">系統通知</p>
-                <p class="text-sm font-medium">歡迎使用退休懶錢包！<br><span class="text-[10px] text-indigo-200">您目前的資產資料為空，請透過下方「記帳」開始您的旅程。</span></p>
+        {/* 1. 首頁 (持股) */}
+        {view === 'holding' && (
+          <div className="flex flex-col h-full animate-in fade-in duration-200">
+            <div className="p-5 flex justify-between items-center border-b border-gray-50 sticky top-0 bg-white z-20">
+              <div className="flex flex-col">
+                <h1 className="text-3xl font-black italic text-gray-800">St<span className="text-blue-600">o</span>ckify<div className="w-2 h-2 bg-blue-500 rounded-full inline-block ml-1"></div></h1>
+                <p className="text-[10px] text-gray-300 font-bold ml-1 uppercase tracking-widest">{APP_VERSION}</p>
+              </div>
+              <button onClick={() => setView('settings')} className="p-2 text-gray-400 hover:text-gray-600 transition-colors"><Settings size={26}/></button>
             </div>
-            <button onclick="document.getElementById('toast-container').style.display='none'" class="p-1">
-                <i data-lucide="x" class="w-4 h-4 opacity-70"></i>
-            </button>
-        </div>
-    </div>
 
-    <!-- 版本號與頂部狀態 -->
-    <div class="p-4 flex justify-between items-center text-xs text-slate-500 border-b border-slate-800/50">
-        <span class="flex items-center gap-2">
-            退休懶錢包 
-            <span class="bg-indigo-900/50 text-indigo-400 border border-indigo-700/50 px-2 py-0.5 rounded font-bold number-font">v1.5.2</span>
-        </span>
-        <div class="flex items-center gap-2">
-            <span class="relative flex h-2 w-2">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-              <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-            </span>
-            <span id="exchange-rate" class="number-font">USD/TWD 32.50</span>
-        </div>
-    </div>
-
-    <!-- 總資產儀表板 -->
-    <header class="px-6 py-6 bg-gradient-to-b from-slate-900 to-transparent">
-        <div class="flex justify-between items-end mb-1">
-            <p class="text-slate-400 text-sm font-medium flex items-center gap-1">
-                總資產市值 (TWD) <i data-lucide="info" class="w-3 h-3 text-slate-500"></i>
-            </p>
-            <p class="text-[10px] text-slate-500">已扣除預估稅費</p>
-        </div>
-        
-        <div class="flex flex-col mb-2">
-            <h1 id="total-assets" class="text-5xl font-bold tracking-tight number-font live-update">$0</h1>
-        </div>
-        
-        <div class="flex items-center gap-3 bg-slate-800/40 p-3 rounded-2xl border border-slate-700/50 backdrop-blur-sm mt-4">
-            <div class="p-2 bg-slate-500/10 rounded-xl" id="today-icon-bg">
-                <i data-lucide="activity" class="w-5 h-5 text-slate-400" id="today-icon"></i>
-            </div>
-            <div>
-                <p class="text-xs text-slate-400">今日帳面跳動</p>
-                <div class="flex items-baseline gap-2">
-                    <p id="today-pnl-value" class="text-xl font-bold text-slate-400 number-font">+$0</p>
-                    <span id="total-pnl" class="text-sm font-medium text-slate-400 bg-slate-500/10 px-1.5 py-0.5 rounded number-font">0.00%</span>
-                </div>
-            </div>
-        </div>
-    </header>
-
-    <!-- 核心切換功能 (含息成本與台美股) -->
-    <section class="px-6 py-2 flex items-center justify-between sticky top-0 z-30 bg-[#0b1120]/90 backdrop-blur-md pt-4 pb-4">
-        <div class="flex bg-slate-800 p-1 rounded-xl shadow-inner">
-            <button onclick="switchTab('tw')" id="tab-tw" class="px-5 py-2 rounded-lg text-sm font-bold bg-slate-700 shadow text-white transition-all flex items-center gap-1">
-                🇹🇼 台股 <span class="text-[10px] font-normal opacity-70">90%</span>
-            </button>
-            <button onclick="switchTab('us')" id="tab-us" class="px-5 py-2 rounded-lg text-sm font-bold text-slate-400 transition-all flex items-center gap-1">
-                🇺🇸 美股 <span class="text-[10px] font-normal opacity-70">10%</span>
-            </button>
-        </div>
-        
-        <div class="flex items-center gap-2 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700">
-            <span class="text-xs text-slate-300 font-medium">含息成本</span>
-            <button onclick="toggleDividendAdjusted()" id="dividend-toggle" class="relative inline-flex h-5 w-9 items-center rounded-full bg-slate-600 transition-colors focus:outline-none">
-                <span id="toggle-circle" class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform translate-x-1 shadow-sm"></span>
-            </button>
-        </div>
-    </section>
-
-    <!-- 卡片式資產列表 -->
-    <main id="stock-list" class="px-6 py-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <!-- 卡片由 JS 動態生成 -->
-    </main>
-
-    <!-- 安全護城河 (固定右下角) -->
-    <div id="safety-corner" class="fixed bottom-24 right-6 z-10">
-        <button onclick="toggleSafetyModal()" class="bg-indigo-600 hover:bg-indigo-500 p-3.5 rounded-full shadow-lg shadow-indigo-900/50 border border-indigo-400/30 transition-all active:scale-90 flex items-center justify-center">
-            <i data-lucide="shield-check" class="text-white w-6 h-6"></i>
-        </button>
-    </div>
-
-    <!-- 底部極簡導航 -->
-    <nav class="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-xl border-t border-slate-800 px-6 py-3 flex justify-between items-center z-20 pb-safe">
-        <div class="flex flex-col items-center text-sky-400 cursor-pointer w-1/4">
-            <i data-lucide="radar" class="w-6 h-6"></i>
-            <span class="text-[10px] mt-1 font-bold tracking-wider">跳動</span>
-        </div>
-        <div class="flex flex-col items-center text-slate-500 hover:text-slate-300 cursor-pointer transition-colors w-1/4" onclick="showDividendRecordModal()">
-            <i data-lucide="book-open" class="w-6 h-6"></i>
-            <span class="text-[10px] mt-1 font-medium tracking-wider">領息紀錄</span>
-        </div>
-        
-        <!-- 極速記帳按鈕 -->
-        <div class="flex flex-col items-center text-slate-500 cursor-pointer group w-1/4" onclick="toggleOCRModal()">
-            <div class="bg-gradient-to-tr from-sky-600 to-indigo-500 p-3.5 rounded-full -mt-10 border-4 border-[#0b1120] shadow-xl group-active:scale-95 transition-transform">
-                <i data-lucide="plus" class="w-6 h-6 text-white"></i>
-            </div>
-            <span class="text-[10px] mt-1 font-medium text-slate-300">記帳</span>
-        </div>
-        
-        <!-- 設定與備份 -->
-        <div class="flex flex-col items-center text-slate-500 hover:text-slate-300 cursor-pointer transition-colors w-1/4" onclick="toggleSettingsModal()">
-            <i data-lucide="settings-2" class="w-6 h-6"></i>
-            <span class="text-[10px] mt-1 font-medium tracking-wider">設定</span>
-        </div>
-    </nav>
-
-    <!-- 記帳雙軌並行 (OCR + CSV) 彈窗 -->
-    <div id="ocr-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-end sm:items-center justify-center p-0 sm:p-6 opacity-0 transition-opacity duration-300">
-        <div class="bg-slate-900 w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 border-t sm:border border-slate-700 shadow-2xl transform translate-y-full sm:translate-y-0 transition-transform duration-300" id="ocr-modal-content">
-            <div class="w-12 h-1.5 bg-slate-700 rounded-full mx-auto mb-6 sm:hidden"></div>
-            <h3 class="text-2xl font-bold mb-2 flex items-center gap-2">
-                <i data-lucide="zap" class="text-yellow-400 fill-yellow-400"></i> 極速記帳
-            </h3>
-            <p class="text-sm text-slate-400 mb-6">請選擇您偏好的國泰證券匯入方式，AI 將自動對帳並精算稅費。</p>
-            
-            <div class="grid grid-cols-2 gap-4 mb-6">
-                <!-- 選項 A: OCR 截圖 -->
-                <div class="border border-slate-600 rounded-2xl p-5 text-center bg-slate-800/50 hover:bg-slate-700 transition-colors cursor-pointer" onclick="simulateAIOCR()">
-                    <i data-lucide="camera" class="w-8 h-8 text-sky-400 mx-auto mb-3"></i>
-                    <p class="font-bold text-slate-200 text-sm">📸 截圖 AI 辨識</p>
-                    <p class="text-[10px] text-slate-500 mt-1">相機 / 相簿</p>
-                </div>
-                
-                <!-- 選項 B: CSV 匯入 -->
-                <label class="border border-slate-600 rounded-2xl p-5 text-center bg-slate-800/50 hover:bg-slate-700 transition-colors cursor-pointer block">
-                    <i data-lucide="file-spreadsheet" class="w-8 h-8 text-green-400 mx-auto mb-3"></i>
-                    <p class="font-bold text-slate-200 text-sm">📄 上傳 CSV</p>
-                    <p class="text-[10px] text-slate-500 mt-1">國泰對帳單</p>
-                    <input type="file" accept=".csv" class="hidden" onchange="simulateCSVImport(event)">
-                </label>
-            </div>
-            
-            <button onclick="toggleOCRModal()" class="w-full py-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold transition-colors">
-                取消
-            </button>
-        </div>
-    </div>
-
-    <!-- 安全護城河彈窗 -->
-    <div id="safety-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-6 opacity-0 transition-opacity duration-200">
-        <div class="bg-slate-800 w-full max-w-sm rounded-3xl p-6 border border-slate-700 shadow-2xl transform scale-95 transition-transform duration-200" id="safety-modal-content">
-            <h3 class="text-xl font-bold mb-2 flex items-center gap-2">
-                <i data-lucide="shield-check" class="text-indigo-400"></i> 安全護城河
-            </h3>
-            <p class="text-sm text-slate-400 mb-6">輸入您的緊急預備金，此資金不會受股市波動影響，為您的退休計畫打底。</p>
-            <input type="number" id="emergency-fund-input" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-4 mb-6 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-2xl font-bold number-font transition-all" placeholder="TWD">
-            <div class="flex gap-3">
-                <button onclick="toggleSafetyModal()" class="flex-1 py-3.5 rounded-xl bg-slate-700 text-white font-medium">取消</button>
-                <button onclick="saveEmergencyFund()" class="flex-1 bg-indigo-600 hover:bg-indigo-500 rounded-xl py-3.5 text-white font-bold shadow-lg shadow-indigo-900/50">儲存</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- 領息紀錄 (卡片化明細) 彈窗 -->
-    <div id="dividend-record-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex flex-col justify-end sm:justify-center p-0 sm:p-4 opacity-0 transition-opacity duration-200">
-        <div class="bg-slate-900 w-full sm:max-w-md h-[85vh] sm:h-[80vh] rounded-t-3xl sm:rounded-3xl p-6 border-t sm:border border-slate-700 shadow-2xl relative transform translate-y-full sm:translate-y-0 transition-transform duration-200 flex flex-col" id="dividend-record-content">
-            <button onclick="closeDividendRecordModal()" class="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors bg-slate-800 p-2 rounded-full">
-                <i data-lucide="x" class="w-5 h-5"></i>
-            </button>
-            <h3 class="text-xl font-bold mb-1 flex items-center gap-2">
-                <i data-lucide="book-open" class="text-indigo-400"></i> 領息紀錄
-            </h3>
-            <p class="text-sm text-slate-400 mb-4">按年份統計與各標的領息明細</p>
-            
-            <div class="flex-1 overflow-y-auto no-scrollbar pb-4 space-y-4" id="dividend-history-list">
-                <!-- 由 JS 動態生成年份卡片 -->
-            </div>
-        </div>
-    </div>
-
-    <!-- 設定與備份彈窗 -->
-    <div id="settings-modal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-6 opacity-0 transition-opacity duration-200">
-        <div class="bg-slate-800 w-full max-w-sm rounded-3xl p-6 border border-slate-700 shadow-2xl relative transform scale-95 transition-transform duration-200" id="settings-modal-content">
-            <button onclick="toggleSettingsModal()" class="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors bg-slate-700/50 p-2 rounded-full">
-                <i data-lucide="x" class="w-5 h-5"></i>
-            </button>
-            <h3 class="text-xl font-bold mb-2 flex items-center gap-2">
-                <i data-lucide="settings-2" class="text-sky-400"></i> 設定與備份
-            </h3>
-            <p class="text-sm text-slate-400 mb-6">將您的資產資料匯出為檔案，或從舊檔案還原，實現跨裝置安全手動同步。</p>
-            
-            <div class="space-y-4">
-                <button onclick="exportData()" class="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-white font-bold py-4 rounded-xl transition-colors border border-slate-600">
-                    <i data-lucide="download" class="w-5 h-5 text-sky-400"></i> 匯出備份檔 (.json)
+            <div className="px-6 py-4">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-gray-400 font-bold text-sm uppercase tracking-widest flex items-center">
+                  {showWithDividend ? '累積損益 (含息)' : '持股未實現損益'} 
+                  <button onClick={()=>setIsMasked(!isMasked)} className="ml-2 opacity-30"><RotateCcw size={14}/></button>
+                </span>
+                <button onClick={() => setShowWithDividend(!showWithDividend)} className={`px-3 py-1.5 rounded-xl border text-xs font-black flex items-center space-x-1 ${showWithDividend ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                  {showWithDividend ? <ToggleRight size={18}/> : <ToggleLeft size={18}/>} <span>{showWithDividend ? '含息' : '除息'}</span>
                 </button>
-                <label class="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 rounded-xl transition-colors cursor-pointer shadow-lg shadow-indigo-900/50">
-                    <i data-lucide="upload" class="w-5 h-5 text-white"></i> 還原資料
-                    <input type="file" accept=".json" class="hidden" onchange="importData(event)">
-                </label>
+              </div>
+              <div className="flex items-baseline space-x-3">
+                <span className={`text-5xl font-black tabular-nums tracking-tighter`}><Mask val={stats.currentProfit} /></span>
+                <span className={`font-black text-xl ${stats.currentProfit >= 0 ? 'text-red-500' : 'text-green-600'}`}>{isMasked ? '***' : `${stats.currentProfit >= 0 ? '+' : ''}${stats.profitPct.toFixed(2)}%`}</span>
+              </div>
             </div>
-        </div>
-    </div>
 
-    <!-- JavaScript 應用程式邏輯 -->
-    <script>
-        const APP_VERSION = "1.5.2";
-        const STORAGE_KEY = "lazy_wallet_data_v1.5.2";
-        
-        let isDividendAdjusted = false;
-        let currentTab = 'tw';
-        let sparklineCharts = {}; 
-        
-        const currentExchangeRate = 32.50; 
+            <div className="grid grid-cols-3 px-6 py-8 mt-4 border-y border-gray-100 bg-gray-50/40">
+              <div className="space-y-1"><p className="text-gray-400 font-black text-xs uppercase">今日損益</p><p className="font-black text-2xl"><Mask val={stats.totalDailyP} /></p></div>
+              <div className="space-y-1 border-x border-gray-200 px-2 text-center"><p className="text-gray-400 font-black text-xs uppercase">持股市值</p><p className="font-black text-2xl text-gray-800">{isMasked ? '****' : stats.totalMV.toLocaleString()}</p></div>
+              <div className="space-y-1 text-right"><p className="text-gray-400 font-black text-xs uppercase text-red-500">累積配息</p><p className="font-black text-2xl text-gray-800">{isMasked ? '****' : stats.totalD.toLocaleString()}</p></div>
+            </div>
 
-        // 核心：乾淨的預設空資料 (歸零狀態)
-        const emptyData = {
-            tw: [],
-            us: [],
-            emergencyFund: 0,
-            dividendHistory: []
-        };
+            <div className="flex-1 overflow-y-auto pb-40">
+              <div className="grid grid-cols-4 px-6 py-3 text-xs text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10"><span>股票 / 股數</span><span className="text-right">現價</span><span className="text-right">{showWithDividend ? '含息成本' : '平均成本'}</span><span className="text-right">損益</span></div>
+              {Object.entries(stats.inv).map(([id, data]) => {
+                if (data.sh <= 0) return null;
+                const m = marketData[id] || { p: 0, c: 0 };
+                const unrealized = (data.sh * m.p) - data.cost, profitToShow = showWithDividend ? unrealized + data.div : unrealized;
+                const avg = data.sh > 0 ? (data.cost / data.sh) : 0, divP = data.sh > 0 ? (data.div / data.sh) : 0, displayC = showWithDividend ? (avg - divP).toFixed(2) : avg.toFixed(2);
+                return (
+                  <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="grid grid-cols-4 px-6 py-6 border-b border-gray-50 items-center active:bg-gray-50 cursor-pointer transition-colors">
+                    <div><p className="font-black text-lg text-gray-800 leading-tight">{data.n}</p><p className="text-xs text-gray-400 font-bold">{id} / {data.sh.toLocaleString()}股</p></div>
+                    <div className="text-right"><p className="font-black text-lg">{m.p || "---"}</p><p className={`text-xs font-bold ${m.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{m.c >= 0 ? '▲' : '▼'} {Math.abs(m.c)}</p></div>
+                    <div className="text-right text-gray-600 font-bold text-lg">{isMasked ? '***' : displayC}</div>
+                    <div className="text-right font-black text-lg"><Mask val={profitToShow} /></div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
-        // 讀取資料：確保 LocalStorage 持久化，若無則套用空資料
-        let appData = JSON.parse(localStorage.getItem(STORAGE_KEY)) || emptyData;
-        let livePulseInterval;
-
-        function initApp() {
-            lucide.createIcons();
-            renderAssets();
-            document.getElementById('emergency-fund-input').value = appData.emergencyFund || 0;
-            
-            const hasAssets = appData.tw.length > 0 || appData.us.length > 0;
-            if (hasAssets) {
-                startLivePulse(); 
-            }
-
-            // 初始化時確保存檔
-            saveToLocalStorage();
-            
-            // 推播邏輯
-            if (!hasAssets) {
-                setTimeout(showNotification, 1500);
-            }
-        }
-
-        function saveToLocalStorage() {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-        }
-
-        function showNotification() {
-            const toast = document.getElementById('toast-container');
-            toast.classList.remove('hidden');
-            toast.classList.add('toast-notification');
-        }
-
-        function switchTab(tab) {
-            currentTab = tab;
-            const tabTw = document.getElementById('tab-tw');
-            const tabUs = document.getElementById('tab-us');
-            
-            if (tab === 'tw') {
-                tabTw.className = 'px-5 py-2 rounded-lg text-sm font-bold bg-slate-700 shadow text-white transition-all flex items-center gap-1';
-                tabUs.className = 'px-5 py-2 rounded-lg text-sm font-bold text-slate-400 transition-all flex items-center gap-1 hover:bg-slate-800';
-            } else {
-                tabUs.className = 'px-5 py-2 rounded-lg text-sm font-bold bg-slate-700 shadow text-white transition-all flex items-center gap-1';
-                tabTw.className = 'px-5 py-2 rounded-lg text-sm font-bold text-slate-400 transition-all flex items-center gap-1 hover:bg-slate-800';
-            }
-            renderAssets();
-        }
-
-        function toggleDividendAdjusted() {
-            isDividendAdjusted = !isDividendAdjusted;
-            const circle = document.getElementById('toggle-circle');
-            const bg = document.getElementById('dividend-toggle');
-            
-            if (isDividendAdjusted) {
-                circle.style.transform = 'translateX(16px)';
-                bg.classList.replace('bg-slate-600', 'bg-sky-500');
-            } else {
-                circle.style.transform = 'translateX(4px)';
-                bg.classList.replace('bg-sky-500', 'bg-slate-600');
-            }
-            renderAssets();
-        }
-
-        function renderAssets() {
-            const listContainer = document.getElementById('stock-list');
-            listContainer.innerHTML = '';
-            
-            // 清除舊的 Chart 實例防止內存洩漏
-            Object.values(sparklineCharts).forEach(chart => chart.destroy());
-            sparklineCharts = {};
-            
-            const stocks = appData[currentTab] || [];
-            let totalMarketValueTWD = 0;
-            let todayPnLTWD = 0;
-
-            const allTWValue = (appData.tw || []).reduce((sum, s) => sum + (s.price * s.shares), 0);
-            const allUSValue = (appData.us || []).reduce((sum, s) => sum + (s.price * s.shares * currentExchangeRate), 0);
-            totalMarketValueTWD = allTWValue + allUSValue;
-
-            if (stocks.length === 0) {
-                listContainer.innerHTML = `
-                    <div class="col-span-1 sm:col-span-2 text-center py-12 text-slate-500">
-                        <i data-lucide="inbox" class="w-12 h-12 mx-auto mb-3 opacity-50"></i>
-                        <p>目前沒有${currentTab === 'tw' ? '台股' : '美股'}資產</p>
-                        <p class="text-xs mt-1 opacity-70">請透過下方「記帳」新增您的第一筆交易</p>
-                    </div>
-                `;
-            } else {
-                stocks.forEach(stock => {
-                    const currentPrice = stock.price;
-                    const marketValue = currentTab === 'tw' ? (stock.price * stock.shares) : (stock.price * stock.shares * currentExchangeRate);
-                    const todayJump = stock.change * stock.shares * (currentTab === 'tw' ? 1 : currentExchangeRate);
-                    todayPnLTWD += todayJump;
-                    
-                    let costPerShare = stock.cost;
-                    if (isDividendAdjusted) costPerShare = stock.cost - (stock.dividend || 0);
-
-                    let pnlPercent, profit, usDetailsHTML = '';
-                    
-                    if (currentTab === 'us') {
-                        const originalCostTWD = costPerShare * stock.shares * (stock.costExchangeRate || currentExchangeRate);
-                        profit = marketValue - originalCostTWD;
-                        pnlPercent = originalCostTWD > 0 ? (profit / originalCostTWD * 100).toFixed(2) : 0;
-                        
-                        const stockReturn = costPerShare > 0 ? (stock.price - costPerShare) / costPerShare * 100 : 0;
-                        const fxReturn = stock.costExchangeRate ? (currentExchangeRate - stock.costExchangeRate) / stock.costExchangeRate * 100 : 0;
-                        
-                        usDetailsHTML = `
-                            <div class="col-span-2 mt-2 pt-2 border-t border-slate-700/50 flex justify-between text-[10px] font-mono">
-                                <span class="text-slate-400">股價績效: <span class="${stockReturn >= 0 ? 'text-red-400' : 'text-green-400'}">${stockReturn > 0 ? '+' : ''}${stockReturn.toFixed(1)}%</span></span>
-                                <span class="text-slate-400">匯率損益: <span class="${fxReturn >= 0 ? 'text-red-400' : 'text-green-400'}">${fxReturn > 0 ? '+' : ''}${fxReturn.toFixed(1)}%</span></span>
-                            </div>
-                        `;
-                    } else {
-                        profit = (stock.price - costPerShare) * stock.shares;
-                        const costBase = costPerShare * stock.shares;
-                        pnlPercent = costBase > 0 ? (profit / costBase * 100).toFixed(2) : 0;
-                    }
-
-                    const colorClass = profit >= 0 ? 'up-color' : 'down-color';
-                    const sideColor = profit >= 0 ? 'bg-red-500' : 'bg-green-500';
-
-                    const originalTotalCost = stock.cost * stock.shares;
-                    const totalDividend = (stock.dividend || 0) * stock.shares;
-                    const adjustedTotalCost = originalTotalCost - totalDividend;
-
-                    const card = document.createElement('div');
-                    card.className = 'stock-card bg-slate-800/60 rounded-2xl p-4 border border-slate-700/60 shadow-lg relative overflow-hidden backdrop-blur-sm';
-                    
-                    card.innerHTML = `
-                        <div class="absolute left-0 top-0 bottom-0 w-1 ${sideColor} opacity-80"></div>
-                        <div class="flex justify-between items-start mb-3 pl-1">
-                            <div>
-                                <h3 class="font-bold text-lg text-slate-100 leading-tight">${stock.name}</h3>
-                                <p class="text-[11px] text-slate-500 font-mono mt-0.5">${stock.id}</p>
-                            </div>
-                            <div class="text-right flex flex-col items-end">
-                                <p class="text-xl font-bold number-font text-slate-100">${currentTab === 'us' ? '$' : ''}${currentPrice}</p>
-                                <div class="w-16 h-5 mt-1 opacity-80"><canvas id="sparkline-${stock.id}"></canvas></div>
-                            </div>
-                        </div>
-                        
-                        <div class="grid grid-cols-2 gap-2 bg-slate-900/40 rounded-xl p-3 pl-4 border border-slate-800/50 mb-3">
-                            <div>
-                                <p class="text-[10px] text-slate-500 mb-0.5">總市值 (TWD)</p>
-                                <p class="text-sm font-bold number-font">$${Math.round(marketValue).toLocaleString()}</p>
-                            </div>
-                            <div class="text-right">
-                                <p class="text-[10px] text-slate-500 mb-0.5">${isDividendAdjusted ? '<span class="text-sky-400">含息</span>報酬' : '帳面報酬'}</p>
-                                <p class="text-sm font-bold ${colorClass} number-font">${profit >= 0 ? '+' : ''}${pnlPercent}%</p>
-                            </div>
-                            ${usDetailsHTML}
-                        </div>
-
-                        <div class="bg-slate-900/60 p-2.5 rounded-lg text-[10px] text-slate-400 font-mono space-y-1 border border-slate-800">
-                             <div class="flex justify-between">
-                                <span>未含息總本金</span><span>$${Math.round(currentTab === 'tw'? originalTotalCost : originalTotalCost*(stock.costExchangeRate||currentExchangeRate)).toLocaleString()}</span>
-                             </div>
-                             <div class="flex justify-between">
-                                <span>累計已領股息</span><span class="text-sky-400">-$${Math.round(currentTab === 'tw'? totalDividend : totalDividend*(stock.costExchangeRate||currentExchangeRate)).toLocaleString()}</span>
-                             </div>
-                             <div class="flex justify-between border-t border-slate-700/50 mt-1 pt-1.5">
-                                <span class="font-bold text-slate-300">含息總本金</span><span class="font-bold text-white">$${Math.round(currentTab === 'tw'? adjustedTotalCost : adjustedTotalCost*(stock.costExchangeRate||currentExchangeRate)).toLocaleString()}</span>
-                             </div>
-                        </div>
-                    `;
-                    listContainer.appendChild(card);
-                    
-                    if(stock.history && stock.history.length > 0) {
-                        renderSparkline(`sparkline-${stock.id}`, stock.history);
-                    }
+        {/* 2. 交易紀錄 (復刻圖片 9) */}
+        {view === 'record' && (
+          <div className="flex flex-col h-full animate-in fade-in bg-white">
+            <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20">
+              <h1 className="text-3xl font-black italic text-gray-800">交易流水帳</h1>
+              <button onClick={() => setRecordSortOrder(recordSortOrder === 'desc' ? 'asc' : 'desc')} className="p-2 bg-gray-50 rounded-xl"><ArrowUpDown size={24}/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto pb-40">
+              {(() => {
+                const groups = {};
+                const sorted = [...transactions].sort((a,b) => recordSortOrder === 'desc' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp);
+                sorted.forEach(tx => {
+                  const dateLabel = `${tx.date}(${['日','一','二','三','四','五','六'][new Date(tx.date).getDay()]})`;
+                  if (!groups[dateLabel]) groups[dateLabel] = { txs: [], exp: 0 };
+                  groups[dateLabel].txs.push(tx);
+                  if (tx.type === '買進') groups[dateLabel].exp += Math.abs(tx.total);
                 });
-            }
-            
-            lucide.createIcons();
-            updateDashboardMetrics(totalMarketValueTWD, todayPnLTWD);
-        }
-        
-        function updateDashboardMetrics(totalValue, todayPnL) {
-            document.getElementById('total-assets').innerText = `$${Math.round(totalValue).toLocaleString()}`;
-            
-            const pnlValEl = document.getElementById('today-pnl-value');
-            const pnlPctEl = document.getElementById('total-pnl');
-            const pnlBgEl = document.getElementById('today-icon-bg');
-            const pnlIconEl = document.getElementById('today-icon');
+                return Object.entries(groups).map(([label, g]) => (
+                  <div key={label}>
+                    <div className="bg-gray-50 px-6 py-2 flex justify-between items-center border-b border-gray-100"><span className="text-gray-500 font-black text-xs">{label}</span><span className="text-gray-400 font-bold text-xs uppercase tracking-widest">當日支出: {g.exp.toLocaleString()}</span></div>
+                    {g.txs.map(tx => (
+                      <div key={tx.id} className="grid grid-cols-4 px-6 py-8 border-b border-gray-100 text-base items-center">
+                        <span className="font-black text-lg text-gray-800">{tx.stockName}</span>
+                        <span className="text-center font-bold text-gray-500 text-sm">{tx.type} <br/> {tx.shares.toLocaleString()}股</span>
+                        <span className="text-right font-black text-lg">{tx.price.toLocaleString()}</span>
+                        <div className="flex items-center justify-end space-x-3"><span className={`font-black text-lg ${tx.total >= 0 ? 'text-red-500' : 'text-green-600'}`}>{tx.total.toLocaleString()}</span><button onClick={() => setPendingDeleteId(tx.id)} className="text-gray-300 p-1"><Trash2 size={24}/></button></div>
+                      </div>
+                    ))}
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        )}
 
-            if (totalValue === 0) {
-                pnlValEl.innerText = '+$0';
-                pnlPctEl.innerText = '0.00%';
-                pnlValEl.className = 'text-xl font-bold text-slate-400 number-font';
-                pnlPctEl.className = 'text-sm font-medium text-slate-400 bg-slate-500/10 px-1.5 py-0.5 rounded number-font';
-                pnlBgEl.className = 'p-2 bg-slate-500/10 rounded-xl';
-                pnlIconEl.className = 'w-5 h-5 text-slate-400';
-            } else {
-                pnlValEl.innerText = `${todayPnL >= 0 ? '+' : ''}$${Math.round(todayPnL).toLocaleString()}`;
-                const totalPercent = (todayPnL / totalValue * 100).toFixed(2);
-                pnlPctEl.innerText = `${totalPercent >= 0 ? '+' : ''}${totalPercent}%`;
-                
-                if(todayPnL < 0) {
-                    pnlValEl.className = 'text-xl font-bold down-color number-font';
-                    pnlPctEl.className = 'text-sm font-medium down-color bg-green-500/10 px-1.5 py-0.5 rounded number-font';
-                    pnlBgEl.className = 'p-2 bg-green-500/10 rounded-xl';
-                    pnlIconEl.className = 'w-5 h-5 down-color';
-                } else {
-                    pnlValEl.className = 'text-xl font-bold up-color number-font';
-                    pnlPctEl.className = 'text-sm font-medium up-color bg-red-500/10 px-1.5 py-0.5 rounded number-font';
-                    pnlBgEl.className = 'p-2 bg-red-500/10 rounded-xl';
-                    pnlIconEl.className = 'w-5 h-5 up-color';
-                }
-                
-                startLivePulse();
-            }
-        }
-        
-        function renderSparkline(canvasId, dataPoints) {
-            const canvas = document.getElementById(canvasId);
-            if(!canvas) return;
-            const ctx = canvas.getContext('2d');
-            const isUp = dataPoints[dataPoints.length - 1] >= dataPoints[0];
-            const lineColor = isUp ? '#ef4444' : '#22c55e'; 
-            
-            sparklineCharts[canvasId] = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: ['1', '2', '3', '4', '5', '6', '7'],
-                    datasets: [{
-                        data: dataPoints,
-                        borderColor: lineColor,
-                        borderWidth: 1.5,
-                        tension: 0.3,
-                        pointRadius: 0
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false }, tooltip: { enabled: false } },
-                    scales: { x: { display: false }, y: { display: false } },
-                    layout: { padding: 0 }
-                }
-            });
-        }
+        {/* 3. 年度股息 */}
+        {view === 'dividend' && (
+          <div className="flex flex-col h-full animate-in fade-in bg-white">
+            <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20"><h1 className="text-3xl font-black italic text-gray-800">股息統計</h1><Coins size={28} className="text-blue-500"/></div>
+            <div className="flex-1 overflow-y-auto pb-40 p-6 space-y-8">
+               {(() => {
+                 const years = {};
+                 transactions.filter(t => t.type === '配息').forEach(tx => {
+                   const year = tx.date.split('/')[0];
+                   if (!years[year]) years[year] = { stocks: {}, total: 0 };
+                   if (!years[year].stocks[tx.stockId]) years[year].stocks[tx.stockId] = { n: tx.stockName, amt: 0 };
+                   years[year].stocks[tx.stockId].amt += Math.abs(tx.total);
+                   years[year].total += Math.abs(tx.total);
+                 });
+                 return Object.entries(years).sort((a,b) => b[0] - a[0]).map(([y, d]) => (
+                   <div key={y} className="bg-gray-50 rounded-[32px] overflow-hidden border border-gray-100 shadow-sm">
+                     <div className="bg-blue-600 px-6 py-4 flex justify-between items-center text-white"><span className="text-2xl font-black">{y} 年度</span><div className="text-right"><p className="text-[10px] font-black opacity-60 uppercase tracking-widest">Total Dividend</p><p className="text-xl font-black">${d.total.toLocaleString()}</p></div></div>
+                     <div className="p-4 space-y-4">{Object.entries(d.stocks).map(([id, s]) => (<div key={id} className="flex justify-between items-center px-2 border-b border-gray-100 pb-4 last:border-0 last:pb-0"><div className="flex flex-col"><span className="font-black text-lg text-gray-800">{s.n}</span><span className="text-[10px] font-black text-gray-400">{id}</span></div><span className="text-xl font-black text-red-500 tabular-nums">${s.amt.toLocaleString()}</span></div>))}</div>
+                   </div>
+                 ));
+               })()}
+            </div>
+          </div>
+        )}
 
-        function startLivePulse() {
-            clearInterval(livePulseInterval);
-            
-            const hasAssets = appData.tw.length > 0 || appData.us.length > 0;
-            if (!hasAssets) return; 
-
-            livePulseInterval = setInterval(() => {
-                const isUp = Math.random() > 0.5;
-                const totalAssetsEl = document.getElementById('total-assets');
-                let currentVal = parseInt(totalAssetsEl.innerText.replace(/[$,]/g, ''));
-                if(isNaN(currentVal) || currentVal === 0) return;
-
-                let change = Math.floor(Math.random() * 500);
-                if (isUp) currentVal += change; else currentVal -= change;
-                
-                totalAssetsEl.classList.remove('live-update');
-                void totalAssetsEl.offsetWidth; 
-                totalAssetsEl.classList.add('live-update');
-                
-                totalAssetsEl.innerText = `$${currentVal.toLocaleString()}`;
-            }, 3500);
-        }
-
-        // ---------- UI 彈窗控制邏輯 ----------
-        function toggleModal(modalId, contentId) {
-            const modal = document.getElementById(modalId);
-            const content = document.getElementById(contentId);
-            
-            if (modal.classList.contains('hidden')) {
-                modal.classList.remove('hidden');
-                setTimeout(() => {
-                    modal.classList.remove('opacity-0');
-                    if(window.innerWidth < 640 && content.classList.contains('translate-y-full')) {
-                        content.classList.remove('translate-y-full'); 
-                    } else if (content.classList.contains('scale-95')) {
-                        content.classList.remove('scale-95');
-                    }
-                }, 10);
-            } else {
-                modal.classList.add('opacity-0');
-                if(window.innerWidth < 640 && !content.classList.contains('translate-y-full') && content.className.includes('translate-y-')) {
-                     content.classList.add('translate-y-full');
-                } else if (!content.className.includes('translate-y-')) {
-                     content.classList.add('scale-95');
-                }
-                setTimeout(() => modal.classList.add('hidden'), 300);
-            }
-        }
-
-        function toggleOCRModal() {
-            toggleModal('ocr-modal', 'ocr-modal-content');
-        }
-
-        function toggleSafetyModal() {
-            toggleModal('safety-modal', 'safety-modal-content');
-        }
-        
-        function toggleSettingsModal() {
-            toggleModal('settings-modal', 'settings-modal-content');
-        }
-
-        function showDividendRecordModal() {
-            toggleModal('dividend-record-modal', 'dividend-record-content');
-            renderDividendHistory();
-        }
-
-        function closeDividendRecordModal() {
-            toggleModal('dividend-record-modal', 'dividend-record-content');
-        }
-
-        // ---------- 業務操作邏輯 ----------
-        function simulateAIOCR() {
-            alert("✨ 辨識成功！\n\n買入：00929 復華台灣科技優息\n股數：5,000股\n單價：19.50\n\n資料已入庫，現在即使重新整理網頁，資料也不會消失！");
-            const newStock = { 
-                id: '00929', name: '復華科技優息', price: 19.5, shares: 5000, 
-                cost: 19.5, dividend: 0, change: 0.1, 
-                history:[19.3, 19.4, 19.4, 19.5, 19.4, 19.5, 19.5] 
-            };
-            appData.tw.push(newStock);
-            saveToLocalStorage();
-            toggleOCRModal();
-            renderAssets();
-        }
-        
-        function simulateCSVImport(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            alert(`✅ 成功讀取 CSV 檔案：${file.name}\n\n系統已自動抓取欄位並扣除手續費。已匯入：0050 元大台灣50`);
-            const newStock = { 
-                id: '0050', name: '元大台灣50', price: 165, shares: 1000, 
-                cost: 160, dividend: 0, change: 1.5, 
-                history:[160, 161, 163, 162, 164, 163, 165] 
-            };
-            appData.tw.push(newStock);
-            saveToLocalStorage();
-            toggleOCRModal();
-            renderAssets();
-            event.target.value = ''; 
-        }
-
-        function saveEmergencyFund() {
-            const val = document.getElementById('emergency-fund-input').value;
-            appData.emergencyFund = parseInt(val) || 0;
-            saveToLocalStorage();
-            toggleSafetyModal();
-            renderAssets();
-        }
-        
-        function renderDividendHistory() {
-            const listContainer = document.getElementById('dividend-history-list');
-            listContainer.innerHTML = '';
-            
-            if (!appData.dividendHistory || appData.dividendHistory.length === 0) {
-                listContainer.innerHTML = `
-                    <div class="text-center py-12 text-slate-500">
-                        <i data-lucide="book-dashed" class="w-12 h-12 mx-auto mb-3 opacity-50"></i>
-                        <p>目前沒有領息紀錄</p>
+        {/* 4. 個股詳情 */}
+        {view === 'detail' && selectedStockId && (
+          <div className="flex flex-col h-full animate-in slide-in-from-right bg-white overflow-hidden">
+            <div className="p-5 flex items-center border-b border-gray-50 sticky top-0 bg-white z-10 shadow-sm">
+              <button onClick={() => setView('holding')} className="p-1"><ChevronLeft size={40}/></button>
+              <h2 className="flex-1 text-center font-black text-2xl tracking-tight uppercase">
+                {selectedStockId} {stats.inv[selectedStockId]?.n || stockMaster[selectedStockId]?.n}
+              </h2>
+              <div className="w-10"></div>
+            </div>
+            {(() => {
+              const d = stats.inv[selectedStockId];
+              if (!d) return null;
+              const m = marketData[selectedStockId] || { p: 0, c: 0 };
+              const unrealized = (d.sh * m.p) - d.cost, profitToShow = showWithDividend ? unrealized + d.div : unrealized;
+              const isUp = m.c >= 0, avg = d.sh > 0 ? (d.cost / d.sh) : 0, divP = d.sh > 0 ? (d.div / d.sh) : 0, displayA = showWithDividend ? (avg - divP).toFixed(2) : avg.toFixed(2);
+              return (
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className={`px-6 py-5 flex justify-between items-center ${isUp ? 'bg-red-50' : 'bg-green-50'}`}>
+                    <div className={`font-black text-3xl ${isUp ? 'text-red-500' : 'text-green-600'}`}>{m.p} <span className="text-base font-bold ml-1">{isUp ? '▲' : '▼'} {Math.abs(m.c)}</span></div>
+                    <button onClick={()=>setShowWithDividend(!showWithDividend)} className="px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-black shadow-sm flex items-center space-x-1 transition-all">
+                      {showWithDividend ? <ToggleRight className="text-blue-500" size={18}/> : <ToggleLeft className="text-gray-300" size={18}/>} <span>{showWithDividend ? '含息' : '除息'}</span>
+                    </button>
+                  </div>
+                  <div className="p-8 border-b border-gray-50">
+                    <p className="text-gray-400 text-sm font-black uppercase mb-1">{showWithDividend ? '累積損益 (含息)' : '持股未實現損益'}</p>
+                    <h3 className={`text-5xl font-black tabular-nums tracking-tighter`}><Mask val={profitToShow} /></h3>
+                    <div className="grid grid-cols-3 gap-y-12 mt-12 text-[15px]">
+                      <div><p className="text-gray-400 text-xs font-black uppercase tracking-tight">{showWithDividend ? '含息成本' : '平均成本'}</p><p className="font-black text-2xl text-gray-800">{isMasked ? '***' : displayA}</p></div>
+                      <div className="text-center"><p className="text-gray-400 text-xs font-black uppercase text-blue-600">已實現損益</p><p className={`font-black text-2xl`}><Mask val={d.realized} /></p></div>
+                      <div className="text-right"><p className="text-gray-400 text-xs font-black uppercase">持股數</p><p className="font-black text-2xl text-gray-800">{d.sh.toLocaleString()}</p></div>
+                      <div><p className="text-gray-400 text-xs font-black uppercase">今日盈虧</p><p className="font-black text-2xl"><Mask val={d.sh * m.c} /></p></div>
+                      <div className="text-center"><p className="text-gray-400 text-xs font-black uppercase">持股市值</p><p className="font-black text-2xl text-gray-800">{(d.sh * m.p).toLocaleString()}</p></div>
+                      <div className="text-right"><p className="text-gray-400 text-xs font-black uppercase text-red-500">累積配息</p><p className="font-black text-2xl text-gray-800">{d.div.toLocaleString()}</p></div>
                     </div>
-                `;
-                lucide.createIcons();
-                return;
-            }
+                  </div>
+                  <div className="flex-1 overflow-y-auto bg-gray-50/40 pb-10">
+                    {d.history.sort((a,b)=>b.timestamp-a.timestamp).map(tx => (
+                      <div key={tx.id} className="grid grid-cols-4 px-6 py-8 border-b border-gray-50 text-base items-center hover:bg-white group transition-colors">
+                        <span className="font-black text-gray-400 text-sm">{tx.date.substring(5)}</span>
+                        <span className="text-center font-black text-gray-800">{tx.type} {tx.shares > 0 ? `${tx.shares.toLocaleString()}股` : ''}</span>
+                        <span className="text-right font-black">{tx.price > 0 ? tx.price.toLocaleString() : '-'}</span>
+                        <div className="text-right flex items-center justify-end space-x-4"><Mask val={tx.total} /><button onClick={() => setPendingDeleteId(tx.id)} className="text-gray-300 group-hover:text-red-400 transition-colors p-1"><Trash2 size={24}/></button></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        )}
+      </div>
 
-            appData.dividendHistory.forEach(yearData => {
-                let itemsHTML = yearData.items.map(item => `
-                    <div class="flex justify-between items-center py-2 border-b border-slate-700/50 last:border-0">
-                        <div class="flex items-center gap-2">
-                            <div class="w-1.5 h-1.5 rounded-full bg-sky-400"></div>
-                            <span class="text-sm text-slate-300">${item.name}</span>
-                        </div>
-                        <div class="text-right">
-                            <span class="text-sm font-bold number-font text-white">$${item.amount.toLocaleString()}</span>
-                            <span class="block text-[10px] text-slate-500 mt-0.5 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700 inline-block">#${item.tag}</span>
-                        </div>
-                    </div>
-                `).join('');
-                
-                const card = document.createElement('div');
-                card.className = 'bg-slate-800 rounded-2xl p-5 border border-slate-700 shadow-lg';
-                card.innerHTML = `
-                    <div class="flex justify-between items-end mb-4 pb-4 border-b border-slate-700">
-                        <div>
-                            <span class="text-xl font-bold text-white number-font">${yearData.year}</span>
-                            <span class="text-xs text-slate-400 ml-1">年度</span>
-                        </div>
-                        <div class="text-right">
-                            <span class="text-xs text-slate-400 block mb-0.5">總計領息</span>
-                            <span class="text-2xl font-bold text-sky-400 number-font">$${yearData.total.toLocaleString()}</span>
-                        </div>
-                    </div>
-                    <div class="space-y-1">
-                        ${itemsHTML}
-                    </div>
-                `;
-                listContainer.appendChild(card);
-            });
-            lucide.createIcons();
-        }
+      {/* --- 全域常駐：新增紀錄彈窗 (常駐 DOM) --- */}
+      <div className={`absolute inset-0 bg-white z-[100] flex flex-col transition-all duration-300 transform ${view === 'add' ? 'translate-y-0' : 'translate-y-full pointer-events-none'}`}>
+        <div className="p-5 flex items-center border-b border-gray-50 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('holding')}><ChevronLeft size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tight uppercase">新增交易紀錄</h2><div className="w-10"></div></div>
+        <div className="p-10 space-y-12 flex-1 overflow-y-auto pb-48 bg-white">
+          <div className="space-y-5">
+            <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase tracking-widest w-20">股票代號</label><input className="flex-1 bg-gray-50 p-6 rounded-[24px] outline-none font-black text-2xl border-2 border-transparent focus:border-blue-100 transition-all uppercase" placeholder="如 2330" value={formCode} onChange={e => setFormCode(e.target.value)} /></div>
+            <div className="ml-28 flex items-center space-x-3 h-8">{isSearchingName ? <Loader2 size={20} className="animate-spin text-blue-500" /> : <CheckCircle2 size={20} className={stockMaster[formCode.toUpperCase()] ? "text-blue-500" : "text-gray-100"} />}<span className="text-blue-600 font-black text-xl">{stockMaster[formCode.toUpperCase()]?.n || (formCode.length > 2 ? "Searching..." : "Input Ticker")}</span></div>
+          </div>
+          <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase tracking-widest w-20">日期</label><div className="flex-1 relative"><input type="date" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-xl cursor-pointer" value={formDate} onChange={e => setFormDate(e.target.value)} /><Calendar size={24} className="absolute right-6 top-6 text-gray-300 pointer-events-none" /></div></div>
+          <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase tracking-widest w-20 shrink-0">動作</label><div className="flex space-x-4">{['買進', '賣出', '配息'].map(t => (<button key={t} onClick={() => { setActiveTab(t); setFormTotalAmount(''); }} className={`px-10 py-4 rounded-full text-lg font-black transition-all ${activeTab === t ? 'bg-blue-600 text-white shadow-xl' : 'bg-gray-100 text-gray-400'}`}>{t}</button>))}</div></div>
+          <div className="space-y-10">
+            {activeTab === '配息' ? (
+              <>
+                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">配發金額</label><input type="number" value={formTotalAmount} onChange={e => setFormTotalAmount(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl text-blue-600" placeholder="0" /></div>
+                <div className="text-center text-gray-200 font-bold text-xs uppercase tracking-[5px]">或是計算</div>
+                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">每股息</label><input type="number" value={formPrice} onChange={e => setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0.00" /></div>
+                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">股數</label><input type="number" value={formShares} onChange={e => setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0" /></div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交價</label><input type="number" value={formPrice} onChange={e => setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0.00" /></div>
+                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交股</label><input type="number" value={formShares} onChange={e => setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0" /></div>
+              </>
+            )}
+          </div>
+          <div className="bg-blue-50/50 p-10 rounded-[40px] space-y-8 border border-blue-100/50 shadow-inner">
+            <div className="flex justify-between font-black text-blue-900 items-baseline"><span>{activeTab === '買進' ? '預計總支出' : activeTab === '賣出' ? '預計總收入' : '領息入帳'}</span><span className="text-5xl tabular-nums tracking-tighter">$ {Math.abs(calc.total).toLocaleString()}</span></div>
+          </div>
+        </div>
+        <div className="absolute bottom-0 left-0 right-0 p-8 grid grid-cols-2 gap-5 border-t border-gray-100 bg-white/95 backdrop-blur-md z-10 shadow-2xl"><button onClick={() => handleSaveToCloud(true)} className="py-6 border-2 border-blue-600 text-blue-600 rounded-[24px] font-black text-xl active:scale-95 transition-transform flex items-center justify-center space-x-3"><Save size={28}/><span>再記一筆</span></button><button onClick={() => handleSaveToCloud(false)} className="py-6 bg-blue-600 text-white rounded-[24px] font-black text-xl active:scale-95 shadow-xl shadow-blue-100 transition-transform">完成存檔</button></div>
+      </div>
 
-        // ---------- 備份還原邏輯 ----------
-        function exportData() {
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(appData));
-            const downloadAnchorNode = document.createElement('a');
-            const dateStr = new Date().toISOString().slice(0, 10);
-            
-            downloadAnchorNode.setAttribute("href", dataStr);
-            downloadAnchorNode.setAttribute("download", `lazy_wallet_backup_${dateStr}.json`);
-            
-            document.body.appendChild(downloadAnchorNode); 
-            downloadAnchorNode.click();
-            downloadAnchorNode.remove();
-        }
+      {/* --- 刪除確認 --- */}
+      {pendingDeleteId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-[200] flex items-center justify-center p-8">
+          <div className="bg-white w-full max-w-xs rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95"><div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500"><AlertCircle size={32} /></div><h3 className="text-2xl font-black text-center mb-2 text-gray-800">確定刪除？</h3><div className="grid grid-cols-2 gap-4"><button onClick={() => setPendingDeleteId(null)} className="py-4 bg-gray-100 rounded-2xl font-black text-gray-500 text-lg active:scale-95">取消</button><button onClick={handleCloudDelete} className="py-4 bg-red-500 rounded-2xl font-black text-white text-lg active:scale-95 shadow-lg">確認刪除</button></div></div>
+        </div>
+      )}
 
-        function importData(event) {
-            const file = event.target.files[0];
-            if (!file) return;
+      {/* 設定頁面 */}
+      {view === 'settings' && (
+        <div className="absolute inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-right duration-300">
+          <div className="p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><ChevronLeft size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tighter uppercase text-gray-800">雲端設定</h2></div>
+          <div className="p-10 space-y-10 flex-1 overflow-y-auto">
+             <div className="space-y-4"><label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Key size={20} className="mr-2"/> FinMind API Token</label><input type="password" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-lg border-2 border-transparent focus:border-blue-200 transition-all" value={apiToken} onChange={e => saveToken(e.target.value)} /></div>
+             <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-8 bg-gray-900 text-white rounded-[32px] font-black text-xl flex items-center justify-center space-x-4 active:scale-95 shadow-xl transition-all hover:scale-[1.02]"><Download size={32}/><span>匯出備份 (.json)</span></button>
+             <p className="text-gray-400 text-center font-black text-xs uppercase tracking-widest">User ID: {user?.uid}</p>
+          </div>
+        </div>
+      )}
 
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const importedData = JSON.parse(e.target.result);
-                    if (importedData && importedData.tw && importedData.us) {
-                        appData = importedData;
-                        saveToLocalStorage();
-                        
-                        document.getElementById('emergency-fund-input').value = appData.emergencyFund || 0;
-                        renderAssets();
-                        toggleSettingsModal();
-                        
-                        alert("✅ 備份資料還原成功！資產狀態已更新。");
-                    } else {
-                        alert("❌ 檔案格式不符，請確認這是否為退休懶錢包的備份檔。");
-                    }
-                } catch (error) {
-                    alert("❌ 讀取檔案失敗，請檢查檔案是否損毀。");
-                }
-                event.target.value = ''; 
-            };
-            reader.readAsText(file);
-        }
+      {/* --- 全新：懸浮導覽島系統 --- */}
+      {(view === 'holding' || view === 'record' || view === 'dividend') && (
+        <>
+          {/* 背景導覽條 (島嶼設計) */}
+          <div className="absolute bottom-8 left-6 right-6 h-20 bg-white/80 backdrop-blur-2xl border border-white/50 rounded-[32px] flex items-center justify-between px-6 z-50 shadow-[0_20px_50px_rgba(0,0,0,0.1)]">
+            {/* 左側標籤 */}
+            <div className="flex flex-1 justify-around items-center pr-10">
+              <button onClick={() => setView('holding')} className={`flex flex-col items-center transition-all ${view === 'holding' ? 'text-blue-600 scale-110' : 'text-gray-300'}`}>
+                <PieChart size={28} strokeWidth={view === 'holding' ? 2.5 : 2} />
+                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">持股</span>
+              </button>
+              <button onClick={() => setView('record')} className={`flex flex-col items-center transition-all ${view === 'record' ? 'text-blue-600 scale-110' : 'text-gray-300'}`}>
+                <History size={28} strokeWidth={view === 'record' ? 2.5 : 2} />
+                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">紀錄</span>
+              </button>
+            </div>
 
-        // 啟動應用程式
-        window.onload = initApp;
-    </script>
-</body>
-</html>
+            {/* 右側標籤 */}
+            <div className="flex flex-1 justify-around items-center pl-10">
+              <button onClick={() => setView('dividend')} className={`flex flex-col items-center transition-all ${view === 'dividend' ? 'text-blue-600 scale-110' : 'text-gray-300'}`}>
+                <Coins size={28} strokeWidth={view === 'dividend' ? 2.5 : 2} />
+                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">股息</span>
+              </button>
+              <button onClick={syncMarketData} className={`flex flex-col items-center text-gray-300 ${isUpdating ? 'animate-spin' : 'active:text-blue-500'}`}>
+                <RefreshCw size={28} />
+                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">同步</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 中央大加號懸浮按鈕 (FAB) */}
+          <button 
+            onClick={() => { setFormCode(''); setView('add'); }}
+            className="absolute bottom-10 left-1/2 -translate-x-1/2 w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white z-[60] shadow-[0_15px_30px_rgba(59,130,246,0.5)] active:scale-90 transition-all border-[6px] border-gray-50"
+          >
+            <Plus size={48} strokeWidth={3} />
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
