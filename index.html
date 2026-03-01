@@ -1,507 +1,458 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, query } from 'firebase/firestore';
-import { 
-  ChevronLeft, Info, Plus, History, PieChart, 
-  X, RotateCcw, Search as SearchIcon, Trash2,
-  Download, Upload, Settings, RefreshCw, Save, ChevronRight, Calendar, Key, CheckCircle2, Loader2, AlertCircle, Coins, ArrowUpDown, ToggleLeft, ToggleRight, Cloud
-} from 'lucide-react';
-
-/**
- * 版本號：v4.2.0 Cloud Aesthetic Update
- * 核心改進：
- * 1. 重新設計底部導覽列：中央懸浮 FAB (+) 與標籤分開，外觀更現代整齊。
- * 2. 佈局平衡：左側(持股, 紀錄) | 中央(+) | 右側(股息, 重新整理)。
- * 3. 維持所有 v4.1.0 損益與含息成本計算邏輯。
- * 4. 嚴格執行 14px 字級與常駐 DOM 彈窗技術。
- */
-
-// Firebase 配置 (由環境提供)
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'stockify-v4';
-
-const APP_VERSION = 'v4.2.0 (Cloud)';
-const TOKEN_KEY = 'stockify_token';
-const MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0wMSAwMjowOTo0OCIsInVzZXJfaWQiOiJob25nYm95IiwiZW1haWwiOiJob25nYm95OTJAZ21haWwuY29tIiwiaXAiOiI2MS4yMjAuOTMuNzQifQ.Mk4GPZsGRLM79QvxVHIcRXE5y_FThk9uMCsoJfmQCYc";
-
-export default function App() {
-  // --- 雲端與帳號狀態 ---
-  const [user, setUser] = useState(null);
-  const [isCloudLoading, setIsCloudLoading] = useState(true);
-
-  // --- 基礎狀態 ---
-  const [view, setView] = useState('holding'); 
-  const [transactions, setTransactions] = useState([]);
-  const [stockMaster, setStockMaster] = useState({}); 
-  const [marketData, setMarketData] = useState({}); 
-  const [apiToken, setApiToken] = useState(MY_TOKEN);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [isMasked, setIsMasked] = useState(false);
-  const [showWithDividend, setShowWithDividend] = useState(true); 
-  const [selectedStockId, setSelectedStockId] = useState(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState(null);
-  const [recordSortOrder, setRecordSortOrder] = useState('desc'); 
-
-  // --- 表單狀態 ---
-  const [formCode, setFormCode] = useState('');
-  const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
-  const [activeTab, setActiveTab] = useState('買進');
-  const [formTotalAmount, setFormTotalAmount] = useState(''); 
-  const [formPrice, setFormPrice] = useState('');     
-  const [formShares, setFormShares] = useState('');   
-  const [formFee, setFormFee] = useState('');         
-  const [formNotes, setFormNotes] = useState('');
-  const [isSearchingName, setIsSearchingName] = useState(false);
-
-  // --- 1. Firebase 驗證監聽 ---
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Stockify 雲端專業版 v4.2.3</title>
+    
+    <!-- 1. 引入必要的函式庫 (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- 2. 引入 Firebase SDK (Compat 版) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', "Microsoft JhengHei", sans-serif; overflow: hidden; }
+        .animate-spin-slow { animation: spin 3s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            background: transparent; bottom: 0; color: transparent; cursor: pointer;
+            height: auto; left: 0; position: absolute; right: 0; top: 0; width: auto;
         }
-      } catch (e) { console.error("Auth failed", e); }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (currUser) => {
-      setUser(currUser);
-      setIsCloudLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
 
-  // --- 2. Firestore 資料同步 ---
-  useEffect(() => {
-    if (!user) return;
-    const txCollection = collection(db, 'artifacts', appId, 'users', user.uid, 'transactions');
-    const unsubscribe = onSnapshot(txCollection, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTransactions(data);
-    });
-    const masterDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'master');
-    const unsubMaster = onSnapshot(masterDoc, (docSnap) => {
-      if (docSnap.exists()) setStockMaster(docSnap.data());
-    });
-    return () => { unsubscribe(); unsubMaster(); };
-  }, [user]);
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
 
-  // --- 3. 業務邏輯與 API (FinMind) ---
-  useEffect(() => {
-    const code = formCode.toUpperCase();
-    if (code.length < 2 || stockMaster[code]) return;
-    const timer = setTimeout(() => fetchStockInfo(code), 600);
-    return () => clearTimeout(timer);
-  }, [formCode, stockMaster]);
+        // --- Firebase 設定 ---
+        const firebaseConfig = window.__firebase_config ? JSON.parse(window.__firebase_config) : {
+            apiKey: "", // 請在此填寫您的 API Key
+            authDomain: "",
+            projectId: "",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
+        };
 
-  useEffect(() => {
-    if (view === 'holding' && transactions.length > 0 && apiToken) syncMarketData();
-  }, [view, apiToken]);
-
-  const fetchStockInfo = async (code) => {
-    if (!apiToken || !user) return;
-    setIsSearchingName(true);
-    try {
-      const resp = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${code}&token=${apiToken}`);
-      const json = await resp.json();
-      if (json.data && json.data.length > 0) {
-        const info = json.data[0];
-        const updatedMaster = { ...stockMaster, [code]: { n: info.stock_name, t: code.endsWith('B') ? 'BondETF' : (code.startsWith('00') ? 'StockETF' : 'Stock') } };
-        setStockMaster(updatedMaster);
-        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'master'), updatedMaster);
-      }
-    } catch (e) { console.error(e); }
-    finally { setIsSearchingName(false); }
-  };
-
-  const syncMarketData = async () => {
-    if (isUpdating || !apiToken) return;
-    const codes = Array.from(new Set(transactions.map(t => t.stockId)));
-    if (codes.length === 0) return;
-    setIsUpdating(true);
-    const dateLimit = new Date();
-    dateLimit.setDate(dateLimit.getDate() - 7);
-    const dateStr = dateLimit.toISOString().split('T')[0];
-    try {
-      const newMarket = { ...marketData };
-      for (const code of codes) {
-        const resp = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${code}&start_date=${dateStr}&token=${apiToken}`);
-        const json = await resp.json();
-        if (json.data && json.data.length > 0) {
-          const latest = json.data[json.data.length - 1];
-          const prev = json.data.length > 1 ? json.data[json.data.length - 2] : latest;
-          newMarket[code] = { p: latest.close, c: parseFloat((latest.close - prev.close).toFixed(2)) };
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
         }
-      }
-      setMarketData(newMarket);
-    } catch (e) { console.error(e); }
-    finally { setIsUpdating(false); }
-  };
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const appId = window.__app_id || 'stockify-v4';
 
-  // --- 4. 計算邏輯 ---
-  const stats = useMemo(() => {
-    const inv = {};
-    const sorted = [...transactions].sort((a,b)=> a.timestamp - b.timestamp);
-    sorted.forEach(tx => {
-      const id = tx.stockId;
-      if (!inv[id]) inv[id] = { sh: 0, cost: 0, realized: 0, div: 0, n: tx.stockName, history: [] };
-      inv[id].history.push(tx);
-      if (tx.type === '買進') {
-        inv[id].sh += tx.shares;
-        inv[id].cost += Math.abs(tx.total);
-      } else if (tx.type === '賣出') {
-        if (inv[id].sh > 0) {
-          const avgCost = inv[id].cost / inv[id].sh;
-          const costOfSold = tx.shares * avgCost;
-          inv[id].realized += (tx.total - costOfSold);
-          inv[id].sh -= tx.shares;
-          inv[id].cost -= costOfSold;
-        }
-      } else if (tx.type === '配息') {
-        inv[id].div += Math.abs(tx.total);
-      }
-    });
+        const APP_VERSION = 'v4.2.3 (Stable)';
+        const TOKEN_KEY = 'stockify_token';
+        const MY_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMy0wMSAwMjowOTo0OCIsInVzZXJfaWQiOiJob25nYm95IiwiZW1haWwiOiJob25nYm95OTJAZ21haWwuY29tIiwiaXAiOiI2MS4yMjAuOTMuNzQifQ.Mk4GPZsGRLM79QvxVHIcRXE5y_FThk9uMCsoJfmQCYc";
 
-    let totalMV = 0, totalRemCost = 0, totalDailyP = 0, totalD = 0;
-    Object.entries(inv).forEach(([id, data]) => {
-      const m = marketData[id] || { p: 0, c: 0 };
-      totalMV += Math.max(0, data.sh) * m.p;
-      totalRemCost += Math.max(0, data.cost);
-      totalDailyP += Math.max(0, data.sh) * m.c;
-      totalD += data.div;
-    });
+        // --- SVG 圖示組件 ---
+        const Icon = ({ name, size = 24, className = "" }) => {
+            const icons = {
+                PieChart: <path d="M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z"/>,
+                History: <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8m0-4v4h4"/>,
+                Plus: <path d="M12 5v14M5 12h14"/>,
+                Coins: <React.Fragment><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18.1"/></React.Fragment>,
+                Refresh: <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>,
+                Settings: <React.Fragment><path d="M12.22 2h-.44a2 2 0 0 0-2 2a2 2 0 0 1-2 2a2 2 0 0 0-2 2a2 2 0 0 1-2 2a2 2 0 0 0-2 2v.44a2 2 0 0 0 2 2a2 2 0 0 1 2 2a2 2 0 0 0 2 2a2 2 0 0 1 2 2a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2a2 2 0 0 1 2-2a2 2 0 0 0 2-2a2 2 0 0 1 2-2a2 2 0 0 0 2-2v-.44a2 2 0 0 0-2-2a2 2 0 0 1-2-2a2 2 0 0 0-2-2a2 2 0 0 1-2-2a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></React.Fragment>,
+                ChevronLeft: <path d="m15 18-6-6 6-6"/>,
+                ArrowUpDown: <path d="m21 16-4 4-4-4M21 20V12M3 8l4-4 4 4M3 4v8"/>,
+                ToggleLeft: <React.Fragment><rect width="20" height="12" x="2" y="6" rx="6"/><circle cx="8" cy="12" r="2"/></React.Fragment>,
+                ToggleRight: <React.Fragment><rect width="20" height="12" x="2" y="6" rx="6" fill="#3B82F6"/><circle cx="16" cy="12" r="2" fill="white"/></React.Fragment>,
+                Trash: <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>,
+                Calendar: <React.Fragment><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><path d="M16 2v4M8 2v4M3 10h18"/></React.Fragment>,
+                Key: <React.Fragment><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3y-3.5L15.5 7.5z"/></React.Fragment>,
+                Download: <React.Fragment><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4m4-5 5 5 5-5m-5 5V3"/></React.Fragment>,
+                RotateCcw: <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8m0-4v4h4"/>,
+                AlertCircle: <React.Fragment><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></React.Fragment>,
+                Loader2: <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/>
+            };
+            return (
+                <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                    {icons[name]}
+                </svg>
+            );
+        };
 
-    const unrealized = totalMV - totalRemCost;
-    const currentProfit = showWithDividend ? unrealized + totalD : unrealized;
-    const profitPct = totalRemCost > 0 ? (currentProfit / totalRemCost) * 100 : 0;
-    return { unrealized, currentProfit, profitPct, totalMV, totalRemCost, totalDailyP, totalD, inv };
-  }, [transactions, marketData, showWithDividend]);
+        function App() {
+            // --- 核心狀態 ---
+            const [user, setUser] = useState(null);
+            const [isCloudLoading, setIsCloudLoading] = useState(true);
+            const [view, setView] = useState('holding'); 
+            const [transactions, setTransactions] = useState([]);
+            const [stockMaster, setStockMaster] = useState({}); 
+            const [marketData, setMarketData] = useState({}); 
+            const [apiToken, setApiToken] = useState(MY_TOKEN);
+            const [isUpdating, setIsUpdating] = useState(false);
+            const [isMasked, setIsMasked] = useState(false);
+            const [showWithDividend, setShowWithDividend] = useState(true); 
+            const [selectedStockId, setSelectedStockId] = useState(null);
+            const [pendingDeleteId, setPendingDeleteId] = useState(null);
+            const [recordSortOrder, setRecordSortOrder] = useState('desc'); 
 
-  const calc = useMemo(() => {
-    if (activeTab === '配息') {
-      if (formTotalAmount) return { total: parseFloat(formTotalAmount), fee: 0 };
-      const p = parseFloat(formPrice) || 0, s = parseInt(formShares) || 0, f = parseFloat(formFee) || 0;
-      return { total: (p * s) - f, fee: f };
-    }
-    const p = parseFloat(formPrice) || 0, s = parseInt(formShares) || 0, amount = p * s;
-    if (amount === 0) return { total: 0, fee: 0, tax: 0, taxRate: 0.003 };
-    let fee = Math.floor(amount * 0.001425 * 0.6); if (fee < 20) fee = 20;
-    const code = formCode.toUpperCase();
-    let taxRate = 0.003; if (code.endsWith('B')) taxRate = 0; else if (code.startsWith('00')) taxRate = 0.001;
-    const tax = activeTab === '賣出' ? Math.floor(amount * taxRate) : 0;
-    return { total: activeTab === '買進' ? -(amount + fee) : (amount - fee - tax), fee, tax, taxRate };
-  }, [formPrice, formShares, formFee, formTotalAmount, activeTab, formCode]);
+            // 表單狀態
+            const [formCode, setFormCode] = useState('');
+            const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
+            const [activeTab, setActiveTab] = useState('買進');
+            const [formTotalAmount, setFormTotalAmount] = useState(''); 
+            const [formPrice, setFormPrice] = useState('');     
+            const [formShares, setFormShares] = useState('');   
+            const [formFee, setFormFee] = useState('');         
+            const [isSearchingName, setIsSearchingName] = useState(false);
 
-  // --- 5. 操作處理 ---
-  const handleSaveToCloud = async (stay) => {
-    if (!user || !formCode || (activeTab !== '配息' && (!formPrice || !formShares))) return;
-    const code = formCode.toUpperCase();
-    const newTx = {
-      stockId: code,
-      stockName: stockMaster[code]?.n || `標的 ${code}`,
-      type: activeTab,
-      price: parseFloat(formPrice) || 0,
-      shares: parseInt(formShares) || 0,
-      total: calc.total,
-      notes: formNotes,
-      date: formDate.replace(/-/g, '/'),
-      timestamp: Date.now()
-    };
-    try {
-      const txCollection = collection(db, 'artifacts', appId, 'users', user.uid, 'transactions');
-      await addDoc(txCollection, newTx);
-      setFormPrice(''); setFormShares(''); setFormFee(''); setFormNotes(''); setFormTotalAmount('');
-      if (!stay) { setFormCode(''); setView('holding'); }
-    } catch (e) { console.error("Cloud Save Failed", e); }
-  };
-
-  const handleCloudDelete = async () => {
-    if (!user || !pendingDeleteId) return;
-    try {
-      const txDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'transactions', pendingDeleteId);
-      await deleteDoc(txDoc);
-      setPendingDeleteId(null);
-      const remainingForThisStock = transactions.filter(t => t.stockId === selectedStockId && t.id !== pendingDeleteId);
-      if (view === 'detail' && remainingForThisStock.length === 0) setView('holding');
-    } catch (e) { console.error("Cloud Delete Failed", e); }
-  };
-
-  // --- 6. 介面渲染 ---
-  const Mask = ({ val }) => {
-    if (isMasked) return "****";
-    const num = parseFloat(val) || 0;
-    const color = num >= 0 ? 'text-red-500' : 'text-green-600';
-    return <span className={color}>{num.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>;
-  };
-
-  if (isCloudLoading) return <div className="h-screen w-full flex flex-col items-center justify-center bg-white"><Loader2 className="animate-spin text-blue-500 mb-4" size={48}/><p className="font-black text-blue-500 italic text-xl">STOCKIFY CLOUD</p></div>;
-
-  return (
-    <div className="w-full max-w-screen-sm mx-auto h-screen bg-gray-50 flex flex-col relative overflow-hidden select-none shadow-2xl text-[14px] font-sans">
-      
-      <div className="flex-1 overflow-hidden relative bg-white">
-        
-        {/* 1. 首頁 (持股) */}
-        {view === 'holding' && (
-          <div className="flex flex-col h-full animate-in fade-in duration-200">
-            <div className="p-5 flex justify-between items-center border-b border-gray-50 sticky top-0 bg-white z-20">
-              <div className="flex flex-col">
-                <h1 className="text-3xl font-black italic text-gray-800">St<span className="text-blue-600">o</span>ckify<div className="w-2 h-2 bg-blue-500 rounded-full inline-block ml-1"></div></h1>
-                <p className="text-[10px] text-gray-300 font-bold ml-1 uppercase tracking-widest">{APP_VERSION}</p>
-              </div>
-              <button onClick={() => setView('settings')} className="p-2 text-gray-400 hover:text-gray-600 transition-colors"><Settings size={26}/></button>
-            </div>
-
-            <div className="px-6 py-4">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-gray-400 font-bold text-sm uppercase tracking-widest flex items-center">
-                  {showWithDividend ? '累積損益 (含息)' : '持股未實現損益'} 
-                  <button onClick={()=>setIsMasked(!isMasked)} className="ml-2 opacity-30"><RotateCcw size={14}/></button>
-                </span>
-                <button onClick={() => setShowWithDividend(!showWithDividend)} className={`px-3 py-1.5 rounded-xl border text-xs font-black flex items-center space-x-1 ${showWithDividend ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
-                  {showWithDividend ? <ToggleRight size={18}/> : <ToggleLeft size={18}/>} <span>{showWithDividend ? '含息' : '除息'}</span>
-                </button>
-              </div>
-              <div className="flex items-baseline space-x-3">
-                <span className={`text-5xl font-black tabular-nums tracking-tighter`}><Mask val={stats.currentProfit} /></span>
-                <span className={`font-black text-xl ${stats.currentProfit >= 0 ? 'text-red-500' : 'text-green-600'}`}>{isMasked ? '***' : `${stats.currentProfit >= 0 ? '+' : ''}${stats.profitPct.toFixed(2)}%`}</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 px-6 py-8 mt-4 border-y border-gray-100 bg-gray-50/40">
-              <div className="space-y-1"><p className="text-gray-400 font-black text-xs uppercase">今日損益</p><p className="font-black text-2xl"><Mask val={stats.totalDailyP} /></p></div>
-              <div className="space-y-1 border-x border-gray-200 px-2 text-center"><p className="text-gray-400 font-black text-xs uppercase">持股市值</p><p className="font-black text-2xl text-gray-800">{isMasked ? '****' : stats.totalMV.toLocaleString()}</p></div>
-              <div className="space-y-1 text-right"><p className="text-gray-400 font-black text-xs uppercase text-red-500">累積配息</p><p className="font-black text-2xl text-gray-800">{isMasked ? '****' : stats.totalD.toLocaleString()}</p></div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto pb-40">
-              <div className="grid grid-cols-4 px-6 py-3 text-xs text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10"><span>股票 / 股數</span><span className="text-right">現價</span><span className="text-right">{showWithDividend ? '含息成本' : '平均成本'}</span><span className="text-right">損益</span></div>
-              {Object.entries(stats.inv).map(([id, data]) => {
-                if (data.sh <= 0) return null;
-                const m = marketData[id] || { p: 0, c: 0 };
-                const unrealized = (data.sh * m.p) - data.cost, profitToShow = showWithDividend ? unrealized + data.div : unrealized;
-                const avg = data.sh > 0 ? (data.cost / data.sh) : 0, divP = data.sh > 0 ? (data.div / data.sh) : 0, displayC = showWithDividend ? (avg - divP).toFixed(2) : avg.toFixed(2);
-                return (
-                  <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="grid grid-cols-4 px-6 py-6 border-b border-gray-50 items-center active:bg-gray-50 cursor-pointer transition-colors">
-                    <div><p className="font-black text-lg text-gray-800 leading-tight">{data.n}</p><p className="text-xs text-gray-400 font-bold">{id} / {data.sh.toLocaleString()}股</p></div>
-                    <div className="text-right"><p className="font-black text-lg">{m.p || "---"}</p><p className={`text-xs font-bold ${m.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{m.c >= 0 ? '▲' : '▼'} {Math.abs(m.c)}</p></div>
-                    <div className="text-right text-gray-600 font-bold text-lg">{isMasked ? '***' : displayC}</div>
-                    <div className="text-right font-black text-lg"><Mask val={profitToShow} /></div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* 2. 交易紀錄 (復刻圖片 9) */}
-        {view === 'record' && (
-          <div className="flex flex-col h-full animate-in fade-in bg-white">
-            <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20">
-              <h1 className="text-3xl font-black italic text-gray-800">交易流水帳</h1>
-              <button onClick={() => setRecordSortOrder(recordSortOrder === 'desc' ? 'asc' : 'desc')} className="p-2 bg-gray-50 rounded-xl"><ArrowUpDown size={24}/></button>
-            </div>
-            <div className="flex-1 overflow-y-auto pb-40">
-              {(() => {
-                const groups = {};
-                const sorted = [...transactions].sort((a,b) => recordSortOrder === 'desc' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp);
-                sorted.forEach(tx => {
-                  const dateLabel = `${tx.date}(${['日','一','二','三','四','五','六'][new Date(tx.date).getDay()]})`;
-                  if (!groups[dateLabel]) groups[dateLabel] = { txs: [], exp: 0 };
-                  groups[dateLabel].txs.push(tx);
-                  if (tx.type === '買進') groups[dateLabel].exp += Math.abs(tx.total);
+            // --- 1. Firebase 驗證 ---
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged(async (currUser) => {
+                    if (!currUser) {
+                        try { await auth.signInAnonymously(); } catch (e) { console.error(e); }
+                    } else {
+                        setUser(currUser);
+                        setIsCloudLoading(false);
+                    }
                 });
-                return Object.entries(groups).map(([label, g]) => (
-                  <div key={label}>
-                    <div className="bg-gray-50 px-6 py-2 flex justify-between items-center border-b border-gray-100"><span className="text-gray-500 font-black text-xs">{label}</span><span className="text-gray-400 font-bold text-xs uppercase tracking-widest">當日支出: {g.exp.toLocaleString()}</span></div>
-                    {g.txs.map(tx => (
-                      <div key={tx.id} className="grid grid-cols-4 px-6 py-8 border-b border-gray-100 text-base items-center">
-                        <span className="font-black text-lg text-gray-800">{tx.stockName}</span>
-                        <span className="text-center font-bold text-gray-500 text-sm">{tx.type} <br/> {tx.shares.toLocaleString()}股</span>
-                        <span className="text-right font-black text-lg">{tx.price.toLocaleString()}</span>
-                        <div className="flex items-center justify-end space-x-3"><span className={`font-black text-lg ${tx.total >= 0 ? 'text-red-500' : 'text-green-600'}`}>{tx.total.toLocaleString()}</span><button onClick={() => setPendingDeleteId(tx.id)} className="text-gray-300 p-1"><Trash2 size={24}/></button></div>
-                      </div>
-                    ))}
-                  </div>
-                ));
-              })()}
-            </div>
-          </div>
-        )}
+                return () => unsubscribe();
+            }, []);
 
-        {/* 3. 年度股息 */}
-        {view === 'dividend' && (
-          <div className="flex flex-col h-full animate-in fade-in bg-white">
-            <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20"><h1 className="text-3xl font-black italic text-gray-800">股息統計</h1><Coins size={28} className="text-blue-500"/></div>
-            <div className="flex-1 overflow-y-auto pb-40 p-6 space-y-8">
-               {(() => {
-                 const years = {};
-                 transactions.filter(t => t.type === '配息').forEach(tx => {
-                   const year = tx.date.split('/')[0];
-                   if (!years[year]) years[year] = { stocks: {}, total: 0 };
-                   if (!years[year].stocks[tx.stockId]) years[year].stocks[tx.stockId] = { n: tx.stockName, amt: 0 };
-                   years[year].stocks[tx.stockId].amt += Math.abs(tx.total);
-                   years[year].total += Math.abs(tx.total);
-                 });
-                 return Object.entries(years).sort((a,b) => b[0] - a[0]).map(([y, d]) => (
-                   <div key={y} className="bg-gray-50 rounded-[32px] overflow-hidden border border-gray-100 shadow-sm">
-                     <div className="bg-blue-600 px-6 py-4 flex justify-between items-center text-white"><span className="text-2xl font-black">{y} 年度</span><div className="text-right"><p className="text-[10px] font-black opacity-60 uppercase tracking-widest">Total Dividend</p><p className="text-xl font-black">${d.total.toLocaleString()}</p></div></div>
-                     <div className="p-4 space-y-4">{Object.entries(d.stocks).map(([id, s]) => (<div key={id} className="flex justify-between items-center px-2 border-b border-gray-100 pb-4 last:border-0 last:pb-0"><div className="flex flex-col"><span className="font-black text-lg text-gray-800">{s.n}</span><span className="text-[10px] font-black text-gray-400">{id}</span></div><span className="text-xl font-black text-red-500 tabular-nums">${s.amt.toLocaleString()}</span></div>))}</div>
-                   </div>
-                 ));
-               })()}
-            </div>
-          </div>
-        )}
+            // --- 2. 雲端同步監聽 ---
+            useEffect(() => {
+                if (!user) return;
+                const txRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('transactions');
+                const unsub = txRef.onSnapshot(snap => {
+                    setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                });
+                const masterRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('settings').doc('master');
+                const unsubM = masterRef.onSnapshot(doc => {
+                    if (doc.exists) setStockMaster(doc.data());
+                });
+                const savedToken = localStorage.getItem(TOKEN_KEY);
+                if (savedToken) setApiToken(savedToken);
+                return () => { unsub(); unsubM(); };
+            }, [user]);
 
-        {/* 4. 個股詳情 */}
-        {view === 'detail' && selectedStockId && (
-          <div className="flex flex-col h-full animate-in slide-in-from-right bg-white overflow-hidden">
-            <div className="p-5 flex items-center border-b border-gray-50 sticky top-0 bg-white z-10 shadow-sm">
-              <button onClick={() => setView('holding')} className="p-1"><ChevronLeft size={40}/></button>
-              <h2 className="flex-1 text-center font-black text-2xl tracking-tight uppercase">
-                {selectedStockId} {stats.inv[selectedStockId]?.n || stockMaster[selectedStockId]?.n}
-              </h2>
-              <div className="w-10"></div>
-            </div>
-            {(() => {
-              const d = stats.inv[selectedStockId];
-              if (!d) return null;
-              const m = marketData[selectedStockId] || { p: 0, c: 0 };
-              const unrealized = (d.sh * m.p) - d.cost, profitToShow = showWithDividend ? unrealized + d.div : unrealized;
-              const isUp = m.c >= 0, avg = d.sh > 0 ? (d.cost / d.sh) : 0, divP = d.sh > 0 ? (d.div / d.sh) : 0, displayA = showWithDividend ? (avg - divP).toFixed(2) : avg.toFixed(2);
-              return (
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  <div className={`px-6 py-5 flex justify-between items-center ${isUp ? 'bg-red-50' : 'bg-green-50'}`}>
-                    <div className={`font-black text-3xl ${isUp ? 'text-red-500' : 'text-green-600'}`}>{m.p} <span className="text-base font-bold ml-1">{isUp ? '▲' : '▼'} {Math.abs(m.c)}</span></div>
-                    <button onClick={()=>setShowWithDividend(!showWithDividend)} className="px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-black shadow-sm flex items-center space-x-1 transition-all">
-                      {showWithDividend ? <ToggleRight className="text-blue-500" size={18}/> : <ToggleLeft className="text-gray-300" size={18}/>} <span>{showWithDividend ? '含息' : '除息'}</span>
-                    </button>
-                  </div>
-                  <div className="p-8 border-b border-gray-50">
-                    <p className="text-gray-400 text-sm font-black uppercase mb-1">{showWithDividend ? '累積損益 (含息)' : '持股未實現損益'}</p>
-                    <h3 className={`text-5xl font-black tabular-nums tracking-tighter`}><Mask val={profitToShow} /></h3>
-                    <div className="grid grid-cols-3 gap-y-12 mt-12 text-[15px]">
-                      <div><p className="text-gray-400 text-xs font-black uppercase tracking-tight">{showWithDividend ? '含息成本' : '平均成本'}</p><p className="font-black text-2xl text-gray-800">{isMasked ? '***' : displayA}</p></div>
-                      <div className="text-center"><p className="text-gray-400 text-xs font-black uppercase text-blue-600">已實現損益</p><p className={`font-black text-2xl`}><Mask val={d.realized} /></p></div>
-                      <div className="text-right"><p className="text-gray-400 text-xs font-black uppercase">持股數</p><p className="font-black text-2xl text-gray-800">{d.sh.toLocaleString()}</p></div>
-                      <div><p className="text-gray-400 text-xs font-black uppercase">今日盈虧</p><p className="font-black text-2xl"><Mask val={d.sh * m.c} /></p></div>
-                      <div className="text-center"><p className="text-gray-400 text-xs font-black uppercase">持股市值</p><p className="font-black text-2xl text-gray-800">{(d.sh * m.p).toLocaleString()}</p></div>
-                      <div className="text-right"><p className="text-gray-400 text-xs font-black uppercase text-red-500">累積配息</p><p className="font-black text-2xl text-gray-800">{d.div.toLocaleString()}</p></div>
+            // --- 3. 業務邏輯 ---
+            const syncMarketData = async () => {
+                if (isUpdating || !apiToken) return;
+                const codes = [...new Set(transactions.map(t => t.stockId))];
+                if (codes.length === 0) return;
+                setIsUpdating(true);
+                try {
+                    const newMarket = { ...marketData };
+                    const dateLimit = new Date(); dateLimit.setDate(dateLimit.getDate() - 7);
+                    const dateStr = dateLimit.toISOString().split('T')[0];
+                    for (const code of codes) {
+                        const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${code}&start_date=${dateStr}&token=${apiToken}`;
+                        const resp = await fetch(url);
+                        const json = await resp.json();
+                        if (json.data && json.data.length > 0) {
+                            const latest = json.data[json.data.length - 1];
+                            const prev = json.data.length > 1 ? json.data[json.data.length - 2] : latest;
+                            newMarket[code] = { p: latest.close, c: parseFloat((latest.close - prev.close).toFixed(2)) };
+                        }
+                    }
+                    setMarketData(newMarket);
+                } catch (e) { console.error(e); } finally { setIsUpdating(false); }
+            };
+
+            const fetchStockInfo = async (code) => {
+                if (!apiToken || !user) return;
+                setIsSearchingName(true);
+                try {
+                    const resp = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${code}&token=${apiToken}`);
+                    const json = await resp.json();
+                    if (json.data && json.data.length > 0) {
+                        const info = json.data[0];
+                        const newM = { ...stockMaster, [code]: { n: info.stock_name, t: code.endsWith('B') ? 'BondETF' : (code.startsWith('00') ? 'StockETF' : 'Stock') } };
+                        setStockMaster(newM);
+                        await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('settings').doc('master').set(newM);
+                    }
+                } catch (e) { console.error(e); } finally { setIsSearchingName(false); }
+            };
+
+            useEffect(() => {
+                const code = formCode.toUpperCase();
+                if (code.length < 2 || stockMaster[code]) return;
+                const t = setTimeout(() => fetchStockInfo(code), 600);
+                return () => clearTimeout(t);
+            }, [formCode]);
+
+            const stats = useMemo(() => {
+                const inv = {};
+                [...transactions].sort((a,b)=>a.timestamp - b.timestamp).forEach(tx => {
+                    const id = tx.stockId;
+                    if (!inv[id]) inv[id] = { sh: 0, cost: 0, div: 0, realized: 0, n: tx.stockName, history: [] };
+                    inv[id].history.push(tx);
+                    if (tx.type === '買進') { inv[id].sh += tx.shares; inv[id].cost += Math.abs(tx.total); }
+                    else if (tx.type === '賣出' && inv[id].sh > 0) {
+                        const avg = inv[id].cost / inv[id].sh;
+                        const soldCost = tx.shares * avg;
+                        inv[id].realized += (tx.total - soldCost);
+                        inv[id].cost -= soldCost; inv[id].sh -= tx.shares;
+                    }
+                    else if (tx.type === '配息') { inv[id].div += Math.abs(tx.total); }
+                });
+                let mv = 0, remC = 0, dp = 0, td = 0;
+                Object.entries(inv).forEach(([id, d]) => {
+                    const m = marketData[id] || { p: 0, c: 0 };
+                    mv += d.sh * m.p; remC += d.cost; dp += d.sh * m.c; td += d.div;
+                });
+                const unrealized = mv - remC;
+                const profit = showWithDividend ? unrealized + td : unrealized;
+                return { profit, pct: remC > 0 ? (profit/remC*100) : 0, mv, remC, dp, td, inv };
+            }, [transactions, marketData, showWithDividend]);
+
+            const calc = useMemo(() => {
+                if (activeTab === '配息') {
+                    if (formTotalAmount) return { total: parseFloat(formTotalAmount), fee: 0 };
+                    return { total: (parseFloat(formPrice)||0) * (parseInt(formShares)||0) - (parseFloat(formFee)||0), fee: parseFloat(formFee)||0 };
+                }
+                const amt = (parseFloat(formPrice)||0) * (parseInt(formShares)||0);
+                let f = Math.floor(amt * 0.001425 * 0.6); if (f < 20 && amt > 0) f = 20;
+                let tr = 0.003; if (formCode.endsWith('B')) tr = 0; else if (formCode.startsWith('00')) tr = 0.001;
+                const tax = activeTab === '賣出' ? Math.floor(amt * tr) : 0;
+                return { total: activeTab === '買進' ? -(amt + f) : (amt - f - tax), fee: f + tax };
+            }, [formPrice, formShares, formFee, formTotalAmount, activeTab, formCode]);
+
+            // --- 4. UI 操作 ---
+            const saveTx = async (stay) => {
+                if (!formCode || (activeTab !== '配息' && (!formPrice || !formShares))) return;
+                const code = formCode.toUpperCase();
+                await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('transactions').add({
+                    stockId: code, stockName: stockMaster[code]?.n || `標的 ${code}`,
+                    type: activeTab, price: parseFloat(formPrice)||0, shares: parseInt(formShares)||0,
+                    total: calc.total, date: formDate.replace(/-/g, '/'), timestamp: Date.now()
+                });
+                setFormPrice(''); setFormShares(''); setFormFee(''); setFormTotalAmount('');
+                if (!stay) { setFormCode(''); setView('holding'); }
+            };
+
+            const saveToken = (token) => { setApiToken(token); localStorage.setItem(TOKEN_KEY, token); };
+
+            const Mask = ({ val }) => isMasked ? "****" : <span className={val >= 0 ? 'text-red-500' : 'text-green-600'}>{val.toLocaleString(undefined, {maximumFractionDigits:0})}</span>;
+
+            if (isCloudLoading) return <div className="h-screen flex flex-col items-center justify-center bg-white"><div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div><p className="font-black text-blue-500 italic">STOCKIFY CLOUD</p></div>;
+
+            return (
+                <div className="w-full max-w-screen-sm mx-auto h-screen bg-gray-50 flex flex-col relative overflow-hidden shadow-2xl text-[14px]">
+                    <div className="flex-1 overflow-hidden relative bg-white">
+                        
+                        {/* 1. 首頁 */}
+                        {view === 'holding' && (
+                            <div className="flex flex-col h-full animate-in fade-in">
+                                <div className="p-5 flex justify-between items-center border-b border-gray-50 bg-white sticky top-0 z-20">
+                                    <div className="flex flex-col">
+                                        <h1 className="text-3xl font-black italic text-gray-800">St<span className="text-blue-600">o</span>ckify</h1>
+                                        <p className="text-[10px] text-gray-300 font-bold ml-1 uppercase tracking-widest">{APP_VERSION}</p>
+                                    </div>
+                                    <div className="flex space-x-2">
+                                        <button onClick={() => setIsMasked(!isMasked)} className="p-2 text-gray-300 active:scale-95"><Icon name="RotateCcw" size={24}/></button>
+                                        <button onClick={() => setView('settings')} className="p-2 text-gray-400 active:scale-95"><Icon name="Settings" size={24}/></button>
+                                    </div>
+                                </div>
+                                <div className="px-6 py-6">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-gray-400 font-bold text-xs uppercase tracking-widest">{showWithDividend ? '累積損益 (含息)' : '持股未實現損益'}</span>
+                                        <button onClick={() => setShowWithDividend(!showWithDividend)} className={`px-3 py-1 rounded-xl border text-xs font-black flex items-center space-x-1 ${showWithDividend ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-gray-50 text-gray-400 border-gray-100'}`}>
+                                            {showWithDividend ? <Icon name="ToggleRight" size={20}/> : <Icon name="ToggleLeft" size={20}/>} <span>{showWithDividend ? '含息' : '除息'}</span>
+                                        </button>
+                                    </div>
+                                    <div className="flex items-baseline space-x-3">
+                                        <span className="text-5xl font-black tabular-nums tracking-tighter"><Mask val={stats.profit} /></span>
+                                        <span className={`text-xl font-black ${stats.profit >= 0 ? 'text-red-500' : 'text-green-600'}`}>{isMasked ? '***' : `${stats.profit >= 0 ? '+' : ''}${stats.pct.toFixed(2)}%`}</span>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-3 px-6 py-6 border-y border-gray-100 bg-gray-50/40">
+                                    <div className="text-center"><p className="text-gray-400 font-black text-[10px] uppercase">今日損益</p><p className="font-black text-xl"><Mask val={stats.dp} /></p></div>
+                                    <div className="text-center border-x border-gray-200"><p className="text-gray-400 font-black text-[10px] uppercase tracking-tighter">持股市值</p><p className="font-black text-xl text-gray-800">{isMasked ? '****' : stats.mv.toLocaleString()}</p></div>
+                                    <div className="text-center"><p className="text-gray-400 font-black text-[10px] uppercase text-red-500">累積配息</p><p className="font-black text-xl text-gray-800">{isMasked ? '****' : stats.td.toLocaleString()}</p></div>
+                                </div>
+                                <div className="flex-1 overflow-y-auto pb-40">
+                                    <div className="grid grid-cols-4 px-6 py-3 text-[10px] text-gray-400 font-black uppercase border-b border-gray-50 bg-white sticky top-0 z-10"><span>標的 / 股數</span><span className="text-right">現價</span><span className="text-right">成本</span><span className="text-right">損益</span></div>
+                                    {Object.entries(stats.inv).map(([id, d]) => d.sh > 0 && (
+                                        <div key={id} onClick={() => { setSelectedStockId(id); setView('detail'); }} className="grid grid-cols-4 px-6 py-6 border-b border-gray-50 items-center active:bg-gray-50">
+                                            <div><p className="font-black text-lg leading-tight">{d.n}</p><p className="text-xs text-gray-400">{id} / {d.sh.toLocaleString()}股</p></div>
+                                            <div className="text-right"><p className="font-black text-lg">{marketData[id]?.p || "---"}</p><p className={`text-[10px] font-bold ${marketData[id]?.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{marketData[id]?.c >= 0 ? '▲' : '▼'} {Math.abs(marketData[id]?.c || 0)}</p></div>
+                                            <div className="text-right font-bold text-gray-600">{isMasked ? '***' : ((d.cost - (showWithDividend?d.div:0))/d.sh).toFixed(2)}</div>
+                                            <div className="text-right font-black text-lg"><Mask val={(d.sh*(marketData[id]?.p||0)) - d.cost + (showWithDividend?d.div:0)} /></div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 2. 交易紀錄 (分組) */}
+                        {view === 'record' && (
+                            <div className="flex flex-col h-full animate-in fade-in bg-white">
+                                <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20">
+                                    <h1 className="text-3xl font-black italic text-gray-800">交易流水帳</h1>
+                                    <button onClick={() => setRecordSortOrder(recordSortOrder === 'desc' ? 'asc' : 'desc')} className="p-2 bg-gray-50 rounded-xl"><Icon name="ArrowUpDown" size={24}/></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto pb-40">
+                                    {(() => {
+                                        const groups = {};
+                                        [...transactions].sort((a,b)=>recordSortOrder==='desc' ? b.timestamp-a.timestamp : a.timestamp-b.timestamp).forEach(tx => {
+                                            if (!groups[tx.date]) groups[tx.date] = { txs: [], exp: 0 };
+                                            groups[tx.date].txs.push(tx);
+                                            if (tx.type === '買進') groups[tx.date].exp += Math.abs(tx.total);
+                                        });
+                                        return Object.entries(groups).map(([date, g]) => (
+                                            <div key={date}>
+                                                <div className="bg-gray-50 px-6 py-2 flex justify-between items-center border-b border-gray-100 font-black text-gray-400 text-[10px]"><span>{date}</span><span>當日支出: {g.exp.toLocaleString()}</span></div>
+                                                {g.txs.map(tx => (
+                                                    <div key={tx.id} className="grid grid-cols-4 px-6 py-6 border-b border-gray-100 items-center">
+                                                        <span className="font-black text-lg">{tx.stockName}</span>
+                                                        <span className="text-center font-bold text-gray-500 text-xs">{tx.type}<br/>{tx.shares.toLocaleString()}股</span>
+                                                        <span className="text-right font-black">{tx.price.toLocaleString()}</span>
+                                                        <div className="flex items-center justify-end space-x-3"><span className={`font-black ${tx.total >= 0 ? 'text-red-500' : 'text-green-600'}`}>{tx.total.toLocaleString()}</span><button onClick={()=>setPendingDeleteId(tx.id)} className="text-gray-300 p-1"><Icon name="Trash" size={20}/></button></div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 3. 股息統計 */}
+                        {view === 'dividend' && (
+                            <div className="flex flex-col h-full animate-in fade-in bg-white">
+                                <div className="p-5 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-20"><h1 className="text-3xl font-black italic text-gray-800">股息統計</h1><Icon name="Coins" size={28} className="text-blue-500"/></div>
+                                <div className="flex-1 overflow-y-auto pb-40 p-6 space-y-8">
+                                    {(() => {
+                                        const years = {};
+                                        transactions.filter(t => t.type === '配息').forEach(tx => {
+                                            const year = tx.date.split('/')[0];
+                                            if (!years[year]) years[year] = { stocks: {}, total: 0 };
+                                            if (!years[year].stocks[tx.stockId]) years[year].stocks[tx.stockId] = { n: tx.stockName, amt: 0 };
+                                            years[year].stocks[tx.stockId].amt += Math.abs(tx.total);
+                                            years[year].total += Math.abs(tx.total);
+                                        });
+                                        return Object.entries(years).sort((a,b) => b[0] - a[0]).map(([y, d]) => (
+                                            <div key={y} className="bg-gray-50 rounded-[32px] overflow-hidden border border-gray-100 shadow-sm">
+                                                <div className="bg-blue-600 px-6 py-4 flex justify-between items-center text-white"><span className="text-2xl font-black">{y} 年度</span><div className="text-right"><p className="text-[10px] font-black opacity-60">年度總額</p><p className="text-xl font-black">${d.total.toLocaleString()}</p></div></div>
+                                                <div className="p-4 space-y-4">{Object.entries(d.stocks).map(([id, s]) => (<div key={id} className="flex justify-between items-center px-2 border-b border-gray-100 pb-4 last:border-0 last:pb-0"><div className="flex flex-col"><span className="font-black text-lg text-gray-800">{s.n}</span><span className="text-[10px] font-black text-gray-400">{id}</span></div><span className="text-xl font-black text-red-500 tabular-nums">${s.amt.toLocaleString()}</span></div>))}</div>
+                                            </div>
+                                        ));
+                                    })()}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 4. 設定頁面 (補回 UI) */}
+                        {view === 'settings' && (
+                            <div className="absolute inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-right duration-300">
+                                <div className="p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tighter uppercase text-gray-800">雲端與數據管理</h2></div>
+                                <div className="p-10 space-y-10 flex-1 overflow-y-auto">
+                                    <div className="space-y-4"><label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Icon name="Key" size={20} className="mr-2"/> FinMind API Token</label><input type="password" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-lg border-2 border-transparent focus:border-blue-200 transition-all" value={apiToken} onChange={e => saveToken(e.target.value)} /></div>
+                                    <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-8 bg-gray-900 text-white rounded-[32px] font-black text-xl flex items-center justify-center space-x-4 active:scale-95 shadow-xl transition-all"><Icon name="Download" size={32}/><span>匯出紀錄 (.json)</span></button>
+                                    <p className="text-gray-400 text-center font-black text-[10px] uppercase tracking-widest">User Cloud ID: {user?.uid}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 5. 個股詳情 */}
+                        {view === 'detail' && selectedStockId && (
+                            <div className="flex flex-col h-full animate-in slide-in-from-right bg-white overflow-hidden">
+                                <div className="p-5 flex items-center border-b border-gray-50 sticky top-0 bg-white z-10"><button onClick={() => setView('holding')} className="p-1"><Icon name="ChevronLeft" size={40}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tight uppercase">{selectedStockId} {stockMaster[selectedStockId]?.n}</h2><div className="w-10"></div></div>
+                                {(() => {
+                                    const d = stats.inv[selectedStockId];
+                                    if (!d) return null;
+                                    const m = marketData[selectedStockId] || { p: 0, c: 0 };
+                                    const unrealized = (d.sh * m.p) - d.cost, profitToShow = showWithDividend ? unrealized + d.div : unrealized;
+                                    const avg = d.sh > 0 ? (d.cost / d.sh) : 0, divP = d.sh > 0 ? (d.div / d.sh) : 0, displayA = showWithDividend ? (avg - divP).toFixed(2) : avg.toFixed(2);
+                                    return (
+                                        <div className="flex-1 flex flex-col overflow-hidden">
+                                            <div className={`px-6 py-5 flex justify-between items-center ${m.c >= 0 ? 'bg-red-50' : 'bg-green-50'}`}><div className={`font-black text-3xl ${m.c >= 0 ? 'text-red-500' : 'text-green-600'}`}>{m.p} <span className="text-base font-bold ml-1">{m.c >= 0 ? '▲' : '▼'} {Math.abs(m.c)}</span></div><button onClick={()=>setShowWithDividend(!showWithDividend)} className="px-3 py-1.5 rounded-full bg-white border border-gray-200 text-xs font-black shadow-sm flex items-center space-x-1 transition-all">{showWithDividend ? <Icon name="ToggleRight" size={18}/> : <Icon name="ToggleLeft" size={18}/>} <span>{showWithDividend ? '含息' : '除息'}</span></button></div>
+                                            <div className="p-8 border-b border-gray-50"><p className="text-gray-400 text-sm font-black uppercase mb-1">{showWithDividend ? '累積損益 (含息)' : '持股未實現損益'}</p><h3 className={`text-5xl font-black tabular-nums tracking-tighter`}><Mask val={profitToShow} /></h3>
+                                                <div className="grid grid-cols-3 gap-y-12 mt-12 text-center text-[13px]">
+                                                    <div className="text-left"><p className="text-gray-400 font-black uppercase tracking-tight">{showWithDividend ? '含息成本' : '平均成本'}</p><p className="font-black text-2xl text-gray-800">{isMasked ? '***' : displayA}</p></div>
+                                                    <div><p className="text-gray-400 font-black uppercase text-blue-600">已實現損益</p><p className={`font-black text-2xl`}><Mask val={d.realized} /></p></div>
+                                                    <div className="text-right"><p className="text-gray-400 font-black uppercase">持股數</p><p className="font-black text-2xl text-gray-800">{d.sh.toLocaleString()}</p></div>
+                                                    <div className="text-left"><p className="text-gray-400 font-black uppercase">今日盈虧</p><p className="font-black text-2xl"><Mask val={d.sh * m.c} /></p></div>
+                                                    <div><p className="text-gray-400 font-black uppercase">持股市值</p><p className="font-black text-2xl text-gray-800">{(d.sh * m.p).toLocaleString()}</p></div>
+                                                    <div className="text-right"><p className="text-gray-400 font-black uppercase text-red-500">累積配息</p><p className="font-black text-2xl text-gray-800">{d.div.toLocaleString()}</p></div>
+                                                </div>
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto bg-gray-50/40 pb-10"><div className="grid grid-cols-4 px-6 py-3 text-xs text-gray-400 font-black uppercase border-b border-gray-100 bg-white sticky top-0 z-10"><span>日期</span><span className="text-center">交易</span><span className="text-right">價格</span><span className="text-right">收支</span></div>{d.history.sort((a,b)=>b.timestamp-a.timestamp).map(tx => (<div key={tx.id} className="grid grid-cols-4 px-6 py-8 border-b border-gray-50 text-base items-center hover:bg-white group"><span className="font-black text-gray-400 text-sm">{tx.date.substring(5)}</span><span className="text-center font-black text-gray-800 text-xs">{tx.type} {tx.shares > 0 ? `${tx.shares.toLocaleString()}股` : ''}</span><span className="text-right font-black">{tx.price > 0 ? tx.price.toLocaleString() : '-'}</span><div className="text-right flex items-center justify-end space-x-4"><Mask val={tx.total} /><button onClick={() => setPendingDeleteId(tx.id)} className="text-gray-300 group-hover:text-red-400 transition-colors p-1"><Icon name="Trash" size={24}/></button></div></div>))}</div>
+                                        </div>
+                                    )
+                                })()}
+                            </div>
+                        )}
                     </div>
-                  </div>
-                  <div className="flex-1 overflow-y-auto bg-gray-50/40 pb-10">
-                    {d.history.sort((a,b)=>b.timestamp-a.timestamp).map(tx => (
-                      <div key={tx.id} className="grid grid-cols-4 px-6 py-8 border-b border-gray-50 text-base items-center hover:bg-white group transition-colors">
-                        <span className="font-black text-gray-400 text-sm">{tx.date.substring(5)}</span>
-                        <span className="text-center font-black text-gray-800">{tx.type} {tx.shares > 0 ? `${tx.shares.toLocaleString()}股` : ''}</span>
-                        <span className="text-right font-black">{tx.price > 0 ? tx.price.toLocaleString() : '-'}</span>
-                        <div className="text-right flex items-center justify-end space-x-4"><Mask val={tx.total} /><button onClick={() => setPendingDeleteId(tx.id)} className="text-gray-300 group-hover:text-red-400 transition-colors p-1"><Trash2 size={24}/></button></div>
-                      </div>
-                    ))}
-                  </div>
+
+                    {/* 懸浮導覽島 */}
+                    <div className="absolute bottom-8 left-6 right-6 h-20 bg-white/90 backdrop-blur-2xl border border-white/50 rounded-[32px] flex items-center justify-between px-6 z-50 shadow-2xl">
+                        <div className="flex flex-1 justify-around items-center pr-10">
+                            <button onClick={() => setView('holding')} className={`flex flex-col items-center ${view==='holding'?'text-blue-600':'text-gray-300'}`}><Icon name="PieChart" size={28}/><span className="text-[9px] font-black mt-1 uppercase">持股</span></button>
+                            <button onClick={() => setView('record')} className={`flex flex-col items-center ${view==='record'?'text-blue-600':'text-gray-300'}`}><Icon name="History" size={28}/><span className="text-[9px] font-black mt-1 uppercase">紀錄</span></button>
+                        </div>
+                        <div className="flex flex-1 justify-around items-center pl-10">
+                            <button onClick={() => setView('dividend')} className={`flex flex-col items-center ${view==='dividend'?'text-blue-600':'text-gray-300'}`}><Icon name="Coins" size={28}/><span className="text-[9px] font-black mt-1 uppercase">股息</span></button>
+                            <button onClick={syncMarketData} className={`flex flex-col items-center ${isUpdating?'animate-spin text-blue-400':'text-gray-300'}`}><Icon name="Refresh" size={28}/><span className="text-[9px] font-black mt-1 uppercase">同步</span></button>
+                        </div>
+                    </div>
+                    <button onClick={() => setView('add')} className="absolute bottom-10 left-1/2 -translate-x-1/2 w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white z-[60] shadow-xl border-[6px] border-gray-50 active:scale-90 transition-all">
+                        <Icon name="Plus" size={48}/>
+                    </button>
+
+                    {/* 新增紀錄彈窗 */}
+                    <div className={`absolute inset-0 bg-white z-[100] flex flex-col transition-all duration-300 transform ${view === 'add' ? 'translate-y-0' : 'translate-y-full pointer-events-none'}`}>
+                        <div className="p-5 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')}><Icon name="ChevronLeft" size={40}/></button><h2 className="flex-1 text-center font-black text-2xl uppercase">新增紀錄</h2><div className="w-10"></div></div>
+                        <div className="p-10 space-y-12 flex-1 overflow-y-auto pb-48 bg-white">
+                            <div className="space-y-4">
+                                <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase w-20">股票代號</label><input className="flex-1 bg-gray-50 p-6 rounded-[24px] outline-none font-black text-2xl uppercase" placeholder="如 2330" value={formCode} onChange={e=>setFormCode(e.target.value)} /></div>
+                                <div className="ml-28 font-black text-blue-600 text-xl">{isSearchingName ? "搜尋中..." : (stockMaster[formCode.toUpperCase()]?.n || "輸入代號確認")}</div>
+                            </div>
+                            <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase w-20">日期</label><div className="flex-1 relative"><input type="date" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-xl" value={formDate} onChange={e=>setFormDate(e.target.value)} /><Icon name="Calendar" className="absolute right-6 top-6 text-gray-300 pointer-events-none" size={24}/></div></div>
+                            <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase w-20 shrink-0">動作</label><div className="flex space-x-4">{['買進','賣出','配息'].map(t=>(<button key={t} onClick={()=>setActiveTab(t)} className={`px-10 py-4 rounded-full text-lg font-black ${activeTab===t?'bg-blue-600 text-white shadow-xl':'bg-gray-100 text-gray-400'}`}>{t}</button>))}</div></div>
+                            <div className="space-y-10">
+                                {activeTab === '配息' ? (
+                                    <React.Fragment>
+                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">配發金額</label><input type="number" value={formTotalAmount} onChange={e=>setFormTotalAmount(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl text-blue-600" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">每股股息</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">除息股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" /></div>
+                                    </React.Fragment>
+                                ) : (
+                                    <React.Fragment>
+                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交價格</label><input type="number" value={formPrice} onChange={e=>setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" /></div>
+                                        <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交股數</label><input type="number" value={formShares} onChange={e=>setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" /></div>
+                                    </React.Fragment>
+                                )}
+                            </div>
+                            <div className="bg-blue-50/50 p-10 rounded-[40px] border border-blue-100/50"><div className="flex justify-between font-black text-blue-900 items-baseline"><span>{activeTab==='買進'?'預計總支出':activeTab==='賣出'?'預計總收入':'最終入帳'}</span><span className="text-5xl tabular-nums tracking-tighter">$ {Math.abs(calc.total).toLocaleString()}</span></div></div>
+                        </div>
+                        <div className="absolute bottom-0 left-0 right-0 p-8 grid grid-cols-2 gap-5 border-t border-gray-100 bg-white/95 backdrop-blur-md z-10 shadow-2xl"><button onClick={()=>saveTx(true)} className="py-6 border-2 border-blue-600 text-blue-600 rounded-[24px] font-black text-xl">再記一筆</button><button onClick={()=>saveTx(false)} className="py-6 bg-blue-600 text-white rounded-[24px] font-black text-xl shadow-blue-100">完成存檔</button></div>
+                    </div>
+
+                    {/* 刪除確認彈窗 */}
+                    {pendingDeleteId && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-[200] flex items-center justify-center p-8">
+                            <div className="bg-white w-full max-w-xs rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95">
+                                <div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500"><Icon name="AlertCircle" size={32} /></div>
+                                <h3 className="text-2xl font-black text-center mb-2">確定刪除？</h3>
+                                <p className="text-gray-500 text-center mb-8 font-bold text-sm">刪除後雲端資料將無法還原。</p>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <button onClick={()=>setPendingDeleteId(null)} className="py-4 bg-gray-100 rounded-2xl font-black text-gray-500">取消</button>
+                                    <button onClick={async () => {
+                                        await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('transactions').doc(pendingDeleteId).delete();
+                                        setPendingDeleteId(null);
+                                    }} className="py-4 bg-red-500 rounded-2xl font-black text-white">刪除</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
-              )
-            })()}
-          </div>
-        )}
-      </div>
-
-      {/* --- 全域常駐：新增紀錄彈窗 (常駐 DOM) --- */}
-      <div className={`absolute inset-0 bg-white z-[100] flex flex-col transition-all duration-300 transform ${view === 'add' ? 'translate-y-0' : 'translate-y-full pointer-events-none'}`}>
-        <div className="p-5 flex items-center border-b border-gray-50 bg-white sticky top-0 z-10 shadow-sm"><button onClick={() => setView('holding')}><ChevronLeft size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tight uppercase">新增交易紀錄</h2><div className="w-10"></div></div>
-        <div className="p-10 space-y-12 flex-1 overflow-y-auto pb-48 bg-white">
-          <div className="space-y-5">
-            <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase tracking-widest w-20">股票代號</label><input className="flex-1 bg-gray-50 p-6 rounded-[24px] outline-none font-black text-2xl border-2 border-transparent focus:border-blue-100 transition-all uppercase" placeholder="如 2330" value={formCode} onChange={e => setFormCode(e.target.value)} /></div>
-            <div className="ml-28 flex items-center space-x-3 h-8">{isSearchingName ? <Loader2 size={20} className="animate-spin text-blue-500" /> : <CheckCircle2 size={20} className={stockMaster[formCode.toUpperCase()] ? "text-blue-500" : "text-gray-100"} />}<span className="text-blue-600 font-black text-xl">{stockMaster[formCode.toUpperCase()]?.n || (formCode.length > 2 ? "Searching..." : "Input Ticker")}</span></div>
-          </div>
-          <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase tracking-widest w-20">日期</label><div className="flex-1 relative"><input type="date" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-xl cursor-pointer" value={formDate} onChange={e => setFormDate(e.target.value)} /><Calendar size={24} className="absolute right-6 top-6 text-gray-300 pointer-events-none" /></div></div>
-          <div className="flex items-center space-x-6"><label className="text-gray-400 font-black text-sm uppercase tracking-widest w-20 shrink-0">動作</label><div className="flex space-x-4">{['買進', '賣出', '配息'].map(t => (<button key={t} onClick={() => { setActiveTab(t); setFormTotalAmount(''); }} className={`px-10 py-4 rounded-full text-lg font-black transition-all ${activeTab === t ? 'bg-blue-600 text-white shadow-xl' : 'bg-gray-100 text-gray-400'}`}>{t}</button>))}</div></div>
-          <div className="space-y-10">
-            {activeTab === '配息' ? (
-              <>
-                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">配發金額</label><input type="number" value={formTotalAmount} onChange={e => setFormTotalAmount(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl text-blue-600" placeholder="0" /></div>
-                <div className="text-center text-gray-200 font-bold text-xs uppercase tracking-[5px]">或是計算</div>
-                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">每股息</label><input type="number" value={formPrice} onChange={e => setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0.00" /></div>
-                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">股數</label><input type="number" value={formShares} onChange={e => setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0" /></div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交價</label><input type="number" value={formPrice} onChange={e => setFormPrice(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0.00" /></div>
-                <div className="flex items-center border-b border-gray-100 pb-6"><label className="text-gray-400 font-black text-sm uppercase w-20">成交股</label><input type="number" value={formShares} onChange={e => setFormShares(e.target.value)} className="flex-1 ml-8 outline-none font-black text-3xl" placeholder="0" /></div>
-              </>
-            )}
-          </div>
-          <div className="bg-blue-50/50 p-10 rounded-[40px] space-y-8 border border-blue-100/50 shadow-inner">
-            <div className="flex justify-between font-black text-blue-900 items-baseline"><span>{activeTab === '買進' ? '預計總支出' : activeTab === '賣出' ? '預計總收入' : '領息入帳'}</span><span className="text-5xl tabular-nums tracking-tighter">$ {Math.abs(calc.total).toLocaleString()}</span></div>
-          </div>
-        </div>
-        <div className="absolute bottom-0 left-0 right-0 p-8 grid grid-cols-2 gap-5 border-t border-gray-100 bg-white/95 backdrop-blur-md z-10 shadow-2xl"><button onClick={() => handleSaveToCloud(true)} className="py-6 border-2 border-blue-600 text-blue-600 rounded-[24px] font-black text-xl active:scale-95 transition-transform flex items-center justify-center space-x-3"><Save size={28}/><span>再記一筆</span></button><button onClick={() => handleSaveToCloud(false)} className="py-6 bg-blue-600 text-white rounded-[24px] font-black text-xl active:scale-95 shadow-xl shadow-blue-100 transition-transform">完成存檔</button></div>
-      </div>
-
-      {/* --- 刪除確認 --- */}
-      {pendingDeleteId && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-md z-[200] flex items-center justify-center p-8">
-          <div className="bg-white w-full max-w-xs rounded-[32px] p-8 shadow-2xl animate-in zoom-in-95"><div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500"><AlertCircle size={32} /></div><h3 className="text-2xl font-black text-center mb-2 text-gray-800">確定刪除？</h3><div className="grid grid-cols-2 gap-4"><button onClick={() => setPendingDeleteId(null)} className="py-4 bg-gray-100 rounded-2xl font-black text-gray-500 text-lg active:scale-95">取消</button><button onClick={handleCloudDelete} className="py-4 bg-red-500 rounded-2xl font-black text-white text-lg active:scale-95 shadow-lg">確認刪除</button></div></div>
-        </div>
-      )}
-
-      {/* 設定頁面 */}
-      {view === 'settings' && (
-        <div className="absolute inset-0 bg-white z-[70] flex flex-col animate-in slide-in-from-right duration-300">
-          <div className="p-6 flex items-center border-b border-gray-50 bg-white sticky top-0"><button onClick={() => setView('holding')} className="p-1"><ChevronLeft size={44}/></button><h2 className="flex-1 text-center font-black text-2xl tracking-tighter uppercase text-gray-800">雲端設定</h2></div>
-          <div className="p-10 space-y-10 flex-1 overflow-y-auto">
-             <div className="space-y-4"><label className="flex items-center text-sm font-black uppercase text-gray-400 tracking-widest"><Key size={20} className="mr-2"/> FinMind API Token</label><input type="password" className="w-full bg-gray-50 p-6 rounded-[24px] outline-none font-black text-lg border-2 border-transparent focus:border-blue-200 transition-all" value={apiToken} onChange={e => saveToken(e.target.value)} /></div>
-             <button onClick={() => { const b = new Blob([JSON.stringify(transactions)], {type: 'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'stockify_backup.json'; a.click(); }} className="w-full py-8 bg-gray-900 text-white rounded-[32px] font-black text-xl flex items-center justify-center space-x-4 active:scale-95 shadow-xl transition-all hover:scale-[1.02]"><Download size={32}/><span>匯出備份 (.json)</span></button>
-             <p className="text-gray-400 text-center font-black text-xs uppercase tracking-widest">User ID: {user?.uid}</p>
-          </div>
-        </div>
-      )}
-
-      {/* --- 全新：懸浮導覽島系統 --- */}
-      {(view === 'holding' || view === 'record' || view === 'dividend') && (
-        <>
-          {/* 背景導覽條 (島嶼設計) */}
-          <div className="absolute bottom-8 left-6 right-6 h-20 bg-white/80 backdrop-blur-2xl border border-white/50 rounded-[32px] flex items-center justify-between px-6 z-50 shadow-[0_20px_50px_rgba(0,0,0,0.1)]">
-            {/* 左側標籤 */}
-            <div className="flex flex-1 justify-around items-center pr-10">
-              <button onClick={() => setView('holding')} className={`flex flex-col items-center transition-all ${view === 'holding' ? 'text-blue-600 scale-110' : 'text-gray-300'}`}>
-                <PieChart size={28} strokeWidth={view === 'holding' ? 2.5 : 2} />
-                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">持股</span>
-              </button>
-              <button onClick={() => setView('record')} className={`flex flex-col items-center transition-all ${view === 'record' ? 'text-blue-600 scale-110' : 'text-gray-300'}`}>
-                <History size={28} strokeWidth={view === 'record' ? 2.5 : 2} />
-                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">紀錄</span>
-              </button>
-            </div>
-
-            {/* 右側標籤 */}
-            <div className="flex flex-1 justify-around items-center pl-10">
-              <button onClick={() => setView('dividend')} className={`flex flex-col items-center transition-all ${view === 'dividend' ? 'text-blue-600 scale-110' : 'text-gray-300'}`}>
-                <Coins size={28} strokeWidth={view === 'dividend' ? 2.5 : 2} />
-                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">股息</span>
-              </button>
-              <button onClick={syncMarketData} className={`flex flex-col items-center text-gray-300 ${isUpdating ? 'animate-spin' : 'active:text-blue-500'}`}>
-                <RefreshCw size={28} />
-                <span className="text-[10px] font-black mt-1 uppercase tracking-tighter">同步</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 中央大加號懸浮按鈕 (FAB) */}
-          <button 
-            onClick={() => { setFormCode(''); setView('add'); }}
-            className="absolute bottom-10 left-1/2 -translate-x-1/2 w-20 h-20 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center text-white z-[60] shadow-[0_15px_30px_rgba(59,130,246,0.5)] active:scale-90 transition-all border-[6px] border-gray-50"
-          >
-            <Plus size={48} strokeWidth={3} />
-          </button>
-        </>
-      )}
-    </div>
-  );
-}
+            );
+        }
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
